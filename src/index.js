@@ -3,8 +3,29 @@ import ReactDOM from 'react-dom';
 import './index.css';
 import App from './App';
 import * as serviceWorker from './serviceWorker';
+import mmaiApp from './redux_reducers/rootReducer';
+import { createStore, applyMiddleware } from 'redux';
+import { Provider } from 'react-redux';
+import createSagaMiddleware from 'redux-saga';
+import rootSaga from './redux_saga/sagas';
 
-ReactDOM.render(<App />, document.getElementById('root'));
+import { disableReactDevTools } from '@fvilers/disable-react-devtools';
+
+if (process.env.NODE_ENV === 'production') {
+    disableReactDevTools();
+}
+
+const sagaMiddleware = createSagaMiddleware();
+const store = createStore(mmaiApp, applyMiddleware(sagaMiddleware));
+
+sagaMiddleware.run(rootSaga);
+
+ReactDOM.render(
+    <Provider store={store}>
+        <App />
+    </Provider>,
+    document.getElementById('root')
+);
 
 // If you want your app to work offline and load faster, you can change
 // unregister() to register() below. Note this comes with some pitfalls.
