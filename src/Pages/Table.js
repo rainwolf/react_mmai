@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { connect } from 'react-redux';
-// import { send_message } from "../redux_actions/actionTypes";
 import PropTypes from 'prop-types';
 import Board from '../Board/Board';
 import Grid from '@material-ui/core/Grid';
@@ -49,7 +48,7 @@ const UnconnectedTable = (props) => {
                 <Grid item style={{ display:'inline-block',width:'970px',height:'90px' }}>
                     <AdSense.Google
                         client='ca-pub-3326997956703582'
-                        slot='6777680396'
+                        slot='3134525496'
                         style={{ display:'inline-block',width:'970px',height:'90px' }}
                         format=''
                     />

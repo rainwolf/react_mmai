@@ -33,7 +33,8 @@ function* addMove(action) {
         let g = 1;
         if (game.game === 3) { g = 2; }
         let level = yield select((state) => state.level);
-        let move = Module.ccall('getAIMove', 'number',['number','number','number','number','number'], [g, level, 1, heapBytes.byteOffset, typedArray.length]);
+        let o = yield select((state) => state.opening_book);
+        let move = Module.ccall('getAIMove', 'number',['number','number','number','number','number'], [g, level, o, heapBytes.byteOffset, typedArray.length]);
         yield Module._free(heapBytes.byteOffset);
         yield put({type: ADD_MOVE, payload: move});
         yield call(playSound, move_sound);

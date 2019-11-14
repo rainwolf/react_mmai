@@ -3,7 +3,8 @@ import {
     START_GAME, MOVE_BACK, MOVE_FORWARD, MOVE_GOTO,
     REMOVE_SNACK, STORE_MOVE, ADD_MOVE, RESET_BOARD,
     START_THINKING, STOP_THINKING, LOAD_WASM, CHANGE_GAME,
-    CHANGE_LEVEL, UNDO_MOVE, CHANGE_COLOR, SUBSCRIBER
+    CHANGE_LEVEL, UNDO_MOVE, CHANGE_COLOR, SUBSCRIBER,
+    OPENING_BOOK
 } from "../redux_actions/actionTypes";
 import { Game } from '../Classes/GameClass';
 
@@ -12,7 +13,8 @@ const initialState = {
     game: new Game(),
     started: false,
     thinking: false,
-    level: 1
+    level: 1,
+    opening_book: 1
 };
 
 // async function loadWasm(state) {
@@ -32,6 +34,9 @@ function mmaiApp (state = initialState, action) {
         // case LOAD_WASM:
         //     loadWasm(newState);
         //     break;
+        case OPENING_BOOK:
+            newState.opening_book = 1 - state.opening_book;
+            break;
         case SUBSCRIBER:
             newState.subscriber = action.payload;
             break;

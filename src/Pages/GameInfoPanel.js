@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { connect } from 'react-redux';
-import { START_GAME, CHANGE_GAME, CHANGE_LEVEL, UNDO_MOVE, CHANGE_COLOR } from "../redux_actions/actionTypes";
+import { START_GAME, CHANGE_GAME, CHANGE_LEVEL, 
+    UNDO_MOVE, CHANGE_COLOR, OPENING_BOOK } from "../redux_actions/actionTypes";
 import Grid from '@material-ui/core/Grid';
 import List from '@material-ui/core/List';
 import ListItem from '@material-ui/core/ListItem';
@@ -31,7 +32,8 @@ const mapStateToProps = state => {
         pressed_play: state.pressed_play,
         game: state.game,
         level: state.level,
-        color: state.game.me
+        color: state.game.me,
+        use_book: state.opening_book
     }
 };
 
@@ -52,6 +54,9 @@ const mapDispatchToProps = dispatch => {
         change_color: () => {
             dispatch({ type: CHANGE_COLOR })
         },
+        toggle_openingbook: () => {
+            dispatch({ type: OPENING_BOOK })
+        },
     }
 };
 
@@ -60,7 +65,9 @@ const mapDispatchToProps = dispatch => {
 
 
 const UnconnectedGameInfoPanel = (props) => {
-    const { game, play_pressed, change_game, change_level, level, undo_move, change_color, color } = props;
+    const { game, play_pressed, change_game, change_level, 
+        level, undo_move, change_color, color, 
+        toggle_openingbook, use_book } = props;
     
     return (
         <div style={{width: '100%', height: '100%'}}>
@@ -103,18 +110,6 @@ const UnconnectedGameInfoPanel = (props) => {
                         </Grid>
                         <Grid item xs>
                             <div style={{display: 'table', margin: '0 auto'}}>
-                                <Button variant="outlined" color="primary" onClick={undo_move}>
-                                    Undo
-                                </Button>
-                            </div>
-                        </Grid>
-                    </Grid>
-                </Grid>
-                <Grid item>
-                    <Grid container direction={'row'} alignItems={'stretch'} wrap={'nowrap'}
-                          style={{width: '100%', height: '100%'}}>
-                        <Grid item xs>
-                            <div style={{display: 'table', margin: '0 auto'}}>
                                 <ListItem key='game' >
                                     <Select
                                         onChange={change_level}
@@ -139,6 +134,18 @@ const UnconnectedGameInfoPanel = (props) => {
                         </Grid>
                         <Grid item xs>
                             <div style={{display: 'table', margin: '0 auto'}}>
+                                <Button variant="outlined" color="primary" onClick={undo_move}>
+                                    Undo
+                                </Button>
+                            </div>
+                        </Grid>
+                    </Grid>
+                </Grid>
+                <Grid item>
+                    <Grid container direction={'row'} alignItems={'stretch'} wrap={'nowrap'}
+                          style={{width: '100%', height: '100%'}}>
+                        <Grid item xs>
+                            <div style={{display: 'table', margin: '0 auto'}}>
                                 <Button variant="outlined" color="primary" onClick={change_game}>
                                     change game
                                 </Button>
@@ -148,6 +155,13 @@ const UnconnectedGameInfoPanel = (props) => {
                             <div style={{display: 'table', margin: '0 auto'}}>
                                 <Button variant="outlined" color="primary" onClick={change_color}>
                                     play as {color}
+                                </Button>
+                            </div>
+                        </Grid>
+                        <Grid item xs>
+                            <div style={{display: 'table', margin: '0 auto'}}>
+                                <Button variant="outlined" color="primary" onClick={toggle_openingbook}>
+                                    {use_book === 1?'use':'no'} opening book
                                 </Button>
                             </div>
                         </Grid>

@@ -14,4 +14,5 @@ export const CHANGE_LEVEL = 'CHANGE_LEVEL';
 export const UNDO_MOVE = 'UNDO_MOVE';
 export const CHANGE_COLOR = 'CHANGE_COLOR';
 export const SUBSCRIBER = 'SUBSCRIBER';
+export const OPENING_BOOK = 'OPENING_BOOK';
 
