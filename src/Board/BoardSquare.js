@@ -52,7 +52,10 @@ class BoardSquare extends Component {
         }
     };
     enterHandler = (e) => {
-        if (this.props.clickHandler === undefined) { return; }
+        if (this.props.clickHandler === undefined) {
+            this.setState({showStone: false});
+            return; 
+        }
         this.setState({showStone: true});
     };
     exitHandler = (e) => {

@@ -29,21 +29,7 @@
     <script src="ai.js"></script>
       <script>
           Module.onRuntimeInitialized = function() {
-              // function _arrayToHeap(typedArray){
-              //     var numBytes = typedArray.length * typedArray.BYTES_PER_ELEMENT;
-              //     var ptr = Module._malloc(numBytes);
-              //     var heapBytes = new Uint8Array(Module.HEAPU8.buffer, ptr, numBytes);
-              //     heapBytes.set(new Uint8Array(typedArray.buffer));
-              //     return heapBytes;
-              // }
-              // var typedArray = new Int32Array([180, 181, 200, 220]);
-              // var heapBytes = _arrayToHeap(typedArray);
-              // var move = Module.ccall('getAIMove', 'number',['number','number','number','number','number'], [2, 3, 1, heapBytes.byteOffset, typedArray.length]);
-              // Module._free(heapBytes.byteOffset);
-              // console.log(move);
-              //
               document.ai_module = Module;
-              
           }
       </script>
   </head>
@@ -60,5 +46,6 @@
       To begin the development, run `npm start` or `yarn start`.
       To create a production bundle, use `npm run build` or `yarn build`.
     -->
+    <script async src="//pagead2.googlesyndication.com/pagead/js/adsbygoogle.js"></script>
   </body>
 </html>

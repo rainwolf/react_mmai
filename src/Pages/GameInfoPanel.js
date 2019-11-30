@@ -3,9 +3,7 @@ import { connect } from 'react-redux';
 import { START_GAME, CHANGE_GAME, CHANGE_LEVEL, 
     UNDO_MOVE, CHANGE_COLOR, OPENING_BOOK } from "../redux_actions/actionTypes";
 import Grid from '@material-ui/core/Grid';
-import List from '@material-ui/core/List';
 import ListItem from '@material-ui/core/ListItem';
-import ListItemText from '@material-ui/core/ListItemText';
 import MenuItem from '@material-ui/core/MenuItem';
 import OutlinedInput from '@material-ui/core/OutlinedInput';
 import Select from '@material-ui/core/Select';
@@ -15,13 +13,14 @@ import Paper from '@material-ui/core/Paper';
 import Button from '@material-ui/core/Button';
 import Typography from '@material-ui/core/Typography';
 import MovesListPanel from './MovesListPanel';
+import LinearProgress from '@material-ui/core/LinearProgress';
 
 const styles = theme => ({
     root: {
         flexGrow: 1,
     },
     paper: {
-        padding: theme.spacing.unit * 2,
+        padding: theme.spacing(2),
         textAlign: 'center',
         color: theme.palette.text.secondary,
     },
@@ -33,7 +32,8 @@ const mapStateToProps = state => {
         game: state.game,
         level: state.level,
         color: state.game.me,
-        use_book: state.opening_book
+        use_book: state.opening_book,
+        thinking: state.thinking
     }
 };
 
@@ -67,18 +67,19 @@ const mapDispatchToProps = dispatch => {
 const UnconnectedGameInfoPanel = (props) => {
     const { game, play_pressed, change_game, change_level, 
         level, undo_move, change_color, color, 
-        toggle_openingbook, use_book } = props;
+        toggle_openingbook, use_book, thinking } = props;
     
     return (
         <div style={{width: '100%', height: '100%'}}>
             <Grid container direction={'column'} alignItems={'stretch'} wrap={'nowrap'} 
-                  style={{width: '100%', height: '100%'}} spacing={2}>
+                  style={{width: '100%', height: '100%'}}>
                 <Grid item>
                     <Paper style={{textAlign: 'center'}}>
-                        <Typography variant="h3">
+                        <Typography variant="h3" color={thinking?'error':'textPrimary'}>
                             {game.game_name()}
                         </Typography>
-                    </Paper>                    
+                    </Paper>
+                    <hr/>
                 </Grid>
                 {game.gameHasCaptures() &&
                 <Grid item>
