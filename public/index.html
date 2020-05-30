@@ -47,5 +47,16 @@
       To create a production bundle, use `npm run build` or `yarn build`.
     -->
     <script async src="//pagead2.googlesyndication.com/pagead/js/adsbygoogle.js"></script>
+    <script>
+        fetch('/gameServer/mmai/personalizedAds.jsp')
+            .then(response => response.text())
+            .then(text => {
+                if (text.indexOf('personalizedAds') === 0) {
+                    (adsbygoogle=window.adsbygoogle||[]).requestNonPersonalizedAds=0
+                } else {
+                    (adsbygoogle=window.adsbygoogle||[]).requestNonPersonalizedAds=1
+                }
+            });
+    </script>
   </body>
 </html>

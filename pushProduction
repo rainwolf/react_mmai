@@ -1,5 +1,5 @@
 #!/bin/bash
 
 rsync -vart --checksum --stats --delete --progress "build/" -e ssh "rainwolf@pente.org:~/tomcat/gameServer/mmai"
-ssh rainwolf@pente.org chown -R rainwolf:tomcat8 tomcat/
+ssh rainwolf@pente.org sudo chown -R rainwolf:tomcat tomcat/
 #ssh -t rainwolf@development.pente.org sudo ./restartTomcat.sh
