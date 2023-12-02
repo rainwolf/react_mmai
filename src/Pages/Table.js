@@ -1,9 +1,8 @@
 import React, {useState, useEffect, useRef} from 'react';
 import {connect} from 'react-redux';
-import PropTypes from 'prop-types';
 import Board from '../Board/Board';
-import Grid from '@material-ui/core/Grid';
-import AdSense from 'react-adsense';
+import Grid from '@mui/material/Grid';
+// import AdSense from 'react-adsense';
 import Snack from './Snack';
 import GameInfoPanel from "./GameInfoPanel";
 

@@ -2,17 +2,16 @@ import React, { useState } from 'react';
 import { connect } from 'react-redux';
 import PropTypes from 'prop-types';
 import { REMOVE_SNACK } from "../redux_actions/actionTypes";
-import CheckCircleIcon from '@material-ui/icons/CheckCircle';
-import ErrorIcon from '@material-ui/icons/Error';
-import InfoIcon from '@material-ui/icons/Info';
-import Snackbar from '@material-ui/core/Snackbar';
-import SnackbarContent from '@material-ui/core/SnackbarContent';
-import { withStyles } from '@material-ui/core/styles';
+import CheckCircleIcon from '@mui/icons-material/CheckCircle';
+import ErrorIcon from '@mui/icons-material/Error';
+import Snackbar from '@mui/material/Snackbar';
+import SnackbarContent from '@mui/material/SnackbarContent';
+import {withStyles} from '@mui/styles';
 import classNames from 'classnames';
-import green from '@material-ui/core/colors/green';
-import amber from '@material-ui/core/colors/amber';
-import red from '@material-ui/core/colors/red';
-import blue from '@material-ui/core/colors/blue';
+import green from '@mui/material/colors/green';
+import amber from '@mui/material/colors/amber';
+import red from '@mui/material/colors/red';
+import blue from '@mui/material/colors/blue';
 
 const mapStateToProps = state => {
     return {
@@ -46,7 +45,6 @@ const styles = theme => ({
     },
     iconVariant: {
         opacity: 0.9,
-        marginRight: theme.spacing(1),
     },
     message: {
         display: 'flex',

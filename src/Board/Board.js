@@ -24,11 +24,10 @@ const mapDispatchToProps = dispatch => {
 
 
 const UnconnectedBoard = (props) => {
-    
-    const { started, game_id, game, table, send_move} = props;
+    const { started, game_id, game, send_move } = props;
 
     // console.log(JSON.stringify(game.abstractBoard))
-    
+
     const makeBoard = (gridsize) => {
         if (game === undefined) { return []; }
         let board = [];
@@ -76,13 +75,13 @@ const UnconnectedBoard = (props) => {
                 if (myTurn) {
                     if (game.abstractBoard[i][j] === 0) {
                         clickHandler = send_move;
-                    } 
+                    }
                     if (game.isGo() && game.gameState.goState === GameState.GoState.MARK_STONES) {
                         if (clickHandler === undefined) {
                             clickHandler = send_move;
                         } else {
                             clickHandler = undefined;
-                        } 
+                        }
                     }
                 }
                 board.push({ key: m, gridsize: gridsize, id: m,
@@ -117,14 +116,14 @@ const UnconnectedBoard = (props) => {
                 dots = [42, 45, 48, 81, 84, 87, 120, 123, 126];
             }
             dots.forEach(d => { board[d].part = 52; });
-        } 
+        }
         const lastMoves = game.last_move();
         lastMoves.forEach(move => {
             if (move !== undefined) {
                 board[move].last_move = true;
-            } 
+            }
         });
-        
+
         return board.map(p => <BoardSquare {...p}/>);
     };
     const makeCoordinateBoundaries = (gridsize) => {
@@ -142,9 +141,9 @@ const UnconnectedBoard = (props) => {
                 </text>
             )
         }
-        return coordinates;           
+        return coordinates;
     };
-    
+
     let style;
     if (game_id < 3) {
         style = 'pente'

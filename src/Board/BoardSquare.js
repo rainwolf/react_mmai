@@ -63,7 +63,10 @@ class BoardSquare extends Component {
     };
     clickHandler = (e) => {
         if (this.props.clickHandler === undefined) { return; }
-        this.props.clickHandler(e.target.id);
+        let id = e.target.id;
+        id = id.replace(/"/g, '');
+        console.log('kitty', id)
+        this.props.clickHandler(id);
         this.setState({showStone: false});
     };
 
@@ -80,7 +83,7 @@ class BoardSquare extends Component {
                onClick={this.clickHandler}
                transform={'translate('+x+','+y+')'}
             >
-                <rect id={this.props.id} width={size} height={size}
+               <rect id={"\"" + this.props.id + "\""} width={size} height={size}
                       fillOpacity={0.0} />
                 {this.boardpart(size)}
                 {this.props.stone && Stone({size: 10, id: this.props.stone})}
@@ -91,6 +94,6 @@ class BoardSquare extends Component {
             </g>
         );
     }
-};
+}
 
 export default BoardSquare;

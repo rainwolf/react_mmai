@@ -1,28 +1,25 @@
-import React, { useState } from 'react';
+import React from 'react';
 import { connect } from 'react-redux';
 import { START_GAME, CHANGE_GAME, CHANGE_LEVEL, 
     UNDO_MOVE, CHANGE_COLOR, OPENING_BOOK } from "../redux_actions/actionTypes";
-import Grid from '@material-ui/core/Grid';
-import ListItem from '@material-ui/core/ListItem';
-import MenuItem from '@material-ui/core/MenuItem';
-import OutlinedInput from '@material-ui/core/OutlinedInput';
-import Select from '@material-ui/core/Select';
+import Grid from '@mui/material/Grid';
+import ListItem from '@mui/material/ListItem';
+import MenuItem from '@mui/material/MenuItem';
+import OutlinedInput from '@mui/material/OutlinedInput';
+import Select from '@mui/material/Select';
 import Captures from './Captures';
-import { withStyles } from '@material-ui/core/styles';
-import Paper from '@material-ui/core/Paper';
-import Button from '@material-ui/core/Button';
-import Typography from '@material-ui/core/Typography';
+import { withStyles } from '@mui/styles';
+import Paper from '@mui/material/Paper';
+import Button from '@mui/material/Button';
+import Typography from '@mui/material/Typography';
 import MovesListPanel from './MovesListPanel';
-import LinearProgress from '@material-ui/core/LinearProgress';
 
 const styles = theme => ({
     root: {
         flexGrow: 1,
     },
     paper: {
-        padding: theme.spacing(2),
         textAlign: 'center',
-        color: theme.palette.text.secondary,
     },
 });
 
@@ -117,7 +114,7 @@ const UnconnectedGameInfoPanel = (props) => {
                                         value={level}
                                         input={
                                             <OutlinedInput
-                                                labelWidth={0}
+                                                // labelWidth={0}
                                                 name="game"
                                                 id="outlined-age-simple"
                                             />
