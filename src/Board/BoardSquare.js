@@ -65,7 +65,6 @@ class BoardSquare extends Component {
         if (this.props.clickHandler === undefined) { return; }
         let id = e.target.id;
         id = id.replace(/"/g, '');
-        console.log('kitty', id)
         this.props.clickHandler(id);
         this.setState({showStone: false});
     };
