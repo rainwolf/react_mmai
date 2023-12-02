@@ -33,7 +33,8 @@ const UnconnectedTable = (props) => {
    // eslint-disable-next-line
    useEffect(() => {
       if (ref.current !== null) {
-         setHeight(ref.current.clientHeight - (!subscriber ? 90 : 0));
+         // setHeight(ref.current.clientHeight - (!subscriber ? 90 : 0));
+         setHeight(ref.current.clientHeight);
          // console.log(ref.current.clientHeight, ref.current.clientWidth)
          setWidth(ref.current.clientWidth);
       }
@@ -45,16 +46,16 @@ const UnconnectedTable = (props) => {
 
          <Grid container direction={'column'} alignItems={'center'} wrap={'nowrap'}
                style={{height: '100%', width: '100%'}}>
-            {!subscriber &&
-               <Grid item style={{display: 'inline-block', width: '970px', height: '90px'}}>
-                  <AdSense.Google
-                     client='ca-pub-3326997956703582'
-                     slot='3134525496'
-                     style={{display: 'inline-block', width: '970px', height: '90px'}}
-                     format=''
-                  />
-               </Grid>
-            }
+            {/*{!subscriber &&*/}
+            {/*   <Grid item style={{display: 'inline-block', width: '970px', height: '90px'}}>*/}
+            {/*      <AdSense.Google*/}
+            {/*         client='ca-pub-3326997956703582'*/}
+            {/*         slot='3134525496'*/}
+            {/*         style={{display: 'inline-block', width: '970px', height: '90px'}}*/}
+            {/*         format=''*/}
+            {/*      />*/}
+            {/*   </Grid>*/}
+            {/*}*/}
             <Grid item style={{flex: '1', minHeight: '0px'}}>
                <div style={{height: '100%', width: Math.min(width, height + 600)}}>
                   <Grid container direction={'row'} alignItems={'stretch'} wrap={'nowrap'} style={{height: '100%'}}>
