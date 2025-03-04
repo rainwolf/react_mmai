@@ -10,7 +10,6 @@ import rootSaga from './redux_saga/sagas';
 
 import { disableReactDevTools } from '@fvilers/disable-react-devtools';
 import {createRoot} from "react-dom/client";
-import process from "process";
 
 if (process.env.NODE_ENV === 'production') {
     disableReactDevTools();
