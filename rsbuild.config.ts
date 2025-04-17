@@ -18,6 +18,6 @@ export default defineConfig({
     distPath: {
       root: 'build',
     },
-    assetPrefix: '/gameServer/live',
+    assetPrefix: '/gameServer/mmai',
   },
 });
