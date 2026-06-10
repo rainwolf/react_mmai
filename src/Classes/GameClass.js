@@ -1545,7 +1545,7 @@ export class Game {
             }
         }
         if (((i-2) > -1) && ((j-2) > -1) && ((i+2) < 19) && ((j+2) < 19)) { // up right
-            if (this.abstractBoard[i+1][j-1] === myColor && this.abstractBoard[i+1][j-1] === myColor) {
+            if (this.abstractBoard[i+1][j-1] === myColor && this.abstractBoard[i-1][j+1] === myColor) {
                 if ((this.abstractBoard[i-2][j+2] === opponentColor) && (this.abstractBoard[i+2][j-2] === opponentColor)) {
                     this.abstractBoard[i+1][j-1] = 0;
                     this.abstractBoard[i-1][j+1] = 0;
