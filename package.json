@@ -21,6 +21,8 @@
     "start": "rsbuild dev",
     "build": "rsbuild build",
     "preview": "rsbuild preview",
+    "test:variants": "node tests/gameclass.test.mjs",
+    "test:engine": "node tests/engine_referee.test.mjs",
     "test": "react-scripts test",
     "eject": "react-scripts eject"
   },

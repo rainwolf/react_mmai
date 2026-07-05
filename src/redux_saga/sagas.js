@@ -32,11 +32,12 @@ function* addMove(action) {
         };
         let typedArray = new Int32Array(game.moves);
         let heapBytes = _arrayToHeap(typedArray);
-        let g = 1;
-        if (game.game === 3) { g = 2; }
+        // Pass the canonical game id straight through. The WASM engine accepts
+        // 1/3/11/15/25 (and legacy 2 = Keryo). ccall arg order matches
+        // getAIMove(game, level, openingBook, moves*, numMoves) in MMAIWASM/mmai.cpp.
         let level = yield select((state) => state.level);
         let o = yield select((state) => state.opening_book);
-        let move = Module.ccall('getAIMove', 'number',['number','number','number','number','number'], [g, level, o, heapBytes.byteOffset, typedArray.length]);
+        let move = Module.ccall('getAIMove', 'number',['number','number','number','number','number'], [game.game, level, o, heapBytes.byteOffset, typedArray.length]);
         yield Module._free(heapBytes.byteOffset);
         yield put({type: ADD_MOVE, payload: move});
         yield call(playSound, move_sound);

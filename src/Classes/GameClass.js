@@ -146,6 +146,11 @@ export class Game {
         if (this.winner) {
             return true;
         }
+        // captures[c] counts the stones LOST by color c (verified empirically: the
+        // game-1 check below maps captures[1] >= 10 -> winner 2, and
+        // #detectPenteCapture credits captures[opponentColor] += 2). So the winner is
+        // 3 - loser once captures[loser] reaches the threshold.
+        const base = (this.game % 2 === 0) ? this.game - 1 : this.game; // Speed twins share the odd base
         if (this.game === 1) {
             if (this.captures[1] >= 10) {
                 this.winner = 2;
@@ -160,12 +165,155 @@ export class Game {
             if (this.captures[2] >= 15) {
                 this.winner = 1;
             }
+        } else if (base === 11) {
+            // Poof-Pente: threshold 10 WITH advantage (SimplePoofPenteState.java:
+            // at 10-10 play continues; a side wins only with >= 10 and a strict lead).
+            if (this.captures[1] >= 10 && this.captures[1] > this.captures[2]) {
+                this.winner = 2;
+            } else if (this.captures[2] >= 10 && this.captures[2] > this.captures[1]) {
+                this.winner = 1;
+            }
+        } else if (base === 15) {
+            // Boat-Pente: a five-in-a-row must survive one opponent reply; the row win
+            // takes precedence over the capture win (per BoatPenteState.java). Capture
+            // win: 10, immediate (no advantage clause).
+            this.#boatRowWinner(false);
+            if (!this.winner) {
+                if (this.captures[1] >= 10) {
+                    this.winner = 2;
+                }
+                if (this.captures[2] >= 10) {
+                    this.winner = 1;
+                }
+            }
+        } else if (base === 25) {
+            // O-Pente: boat survival with pair AND triple capturability, then capture
+            // win 15 WITH advantage (per OPenteState.java).
+            this.#boatRowWinner(true);
+            if (!this.winner) {
+                if (this.captures[1] >= 15 && this.captures[1] > this.captures[2]) {
+                    this.winner = 2;
+                } else if (this.captures[2] >= 15 && this.captures[2] > this.captures[1]) {
+                    this.winner = 1;
+                }
+            }
         }
         if (this.winner) {
             return true;
         } else {
             return false;
         }
+    };
+
+    // Boat/O-Pente five-in-a-row survival, ported from BoatPenteState.isGameOver and
+    // OPenteState.isGameOver. A completed five wins only if no stone in it is part of a
+    // capturable group (pair, plus triple when withTriples). A five owned by the player
+    // to move (i.e. it survived the opponent's reply) wins immediately. Sets and returns
+    // this.winner (1|2) when a surviving five is found; otherwise leaves it unset.
+    #boatRowWinner = (withTriples) => {
+        const N = 19;
+        // (dx, dy) in the same order as the server's `surrounding` offsets
+        // {-1,1,-20,20,-19,19,-18,18}; the pair (2*axis, 2*axis+1) shares an axis.
+        const surr = [[-1, 0], [1, 0], [-1, -1], [1, 1], [0, -1], [0, 1], [1, -1], [-1, 1]];
+        const B = this.abstractBoard;
+        const onBoard = (x, y) => x >= 0 && x < N && y >= 0 && y < N;
+        const isEmpty = (v) => v === 0 || v === -1; // a playable empty flank
+        const numMoves = this.moves.length;
+        const current = this.currentPlayer();
+        let winner = 0;
+        for (let m = 0; m < numMoves; m++) {
+            const p = 1 + (m % 2);
+            const op = 3 - p;
+            const mx = this.moves[m] % N, my = Math.floor(this.moves[m] / N);
+            if (!onBoard(mx, my) || B[mx][my] !== p) {
+                continue; // move was poofed/captured away: no five through it
+            }
+            for (let axis = 0; axis < 4; axis++) {
+                const run = [[mx, my]];
+                for (const di of [2 * axis, 2 * axis + 1]) {
+                    const dx = surr[di][0], dy = surr[di][1];
+                    let cx = mx + dx, cy = my + dy;
+                    while (onBoard(cx, cy) && B[cx][cy] === p) {
+                        run.push([cx, cy]);
+                        cx += dx; cy += dy;
+                    }
+                }
+                if (run.length < 5) {
+                    continue;
+                }
+                // A five owned by the player to move survived the opponent's reply -> win.
+                if (p === current) {
+                    this.winner = p;
+                    return p;
+                }
+                // Otherwise the five was just made: it stands only if unbreakable.
+                let breakable = false;
+                for (let s = 0; s < run.length && !breakable; s++) {
+                    const sx = run[s][0], sy = run[s][1];
+                    // capturable pair {stone, stone+dir} flanked by op and playable-empty
+                    for (let k = 0; k < 8; k++) {
+                        const dx = surr[k][0], dy = surr[k][1];
+                        const ax = sx + dx, ay = sy + dy;
+                        const bx = sx + 2 * dx, by = sy + 2 * dy;
+                        const ex = sx - dx, ey = sy - dy;
+                        if (!onBoard(ax, ay) || !onBoard(bx, by) || !onBoard(ex, ey)) {
+                            continue;
+                        }
+                        const p1 = B[ax][ay], p2 = B[bx][by], p3 = B[ex][ey];
+                        if ((p1 === p && p2 === op && isEmpty(p3)) ||
+                            (p1 === p && isEmpty(p2) && p3 === op)) {
+                            breakable = true;
+                            break;
+                        }
+                    }
+                    if (breakable || !withTriples) {
+                        continue;
+                    }
+                    // capturable triple with the run stone at an end
+                    for (let k = 0; k < 8; k++) {
+                        const dx = surr[k][0], dy = surr[k][1];
+                        const p1 = onBoard(sx + dx, sy + dy) ? B[sx + dx][sy + dy] : -2;
+                        const p2 = onBoard(sx + 2 * dx, sy + 2 * dy) ? B[sx + 2 * dx][sy + 2 * dy] : -2;
+                        const p3 = onBoard(sx + 3 * dx, sy + 3 * dy) ? B[sx + 3 * dx][sy + 3 * dy] : -2;
+                        const p4 = onBoard(sx - dx, sy - dy) ? B[sx - dx][sy - dy] : -2;
+                        if (p1 === -2 || p2 === -2 || p3 === -2 || p4 === -2) {
+                            continue;
+                        }
+                        if ((p1 === p && p2 === p && p4 === op && isEmpty(p3)) ||
+                            (p1 === p && p2 === p && isEmpty(p4) && p3 === op)) {
+                            breakable = true;
+                            break;
+                        }
+                    }
+                    if (breakable) {
+                        continue;
+                    }
+                    // capturable triple with the run stone in the middle (4 axes only)
+                    for (let k = 0; k < 8; k += 2) {
+                        const dx = surr[k][0], dy = surr[k][1];
+                        const p1 = onBoard(sx + dx, sy + dy) ? B[sx + dx][sy + dy] : -2;
+                        const p2 = onBoard(sx - dx, sy - dy) ? B[sx - dx][sy - dy] : -2;
+                        const p3 = onBoard(sx - 2 * dx, sy - 2 * dy) ? B[sx - 2 * dx][sy - 2 * dy] : -2;
+                        const p4 = onBoard(sx + 2 * dx, sy + 2 * dy) ? B[sx + 2 * dx][sy + 2 * dy] : -2;
+                        if (p1 === -2 || p2 === -2 || p3 === -2 || p4 === -2) {
+                            continue;
+                        }
+                        if ((p1 === p && p2 === p && p4 === op && isEmpty(p3)) ||
+                            (p1 === p && p2 === p && isEmpty(p4) && p3 === op)) {
+                            breakable = true;
+                            break;
+                        }
+                    }
+                }
+                if (!breakable) {
+                    winner = p; // a surviving five; keep scanning (a current-player five outranks)
+                }
+            }
+        }
+        if (winner) {
+            this.winner = winner;
+        }
+        return winner;
     };
 
     player_color = (p) => {
@@ -532,6 +680,12 @@ export class Game {
                 this.#applyTournamentRule();
             } else if (this.rated && this.moves.length === 3) {
                 this.#undoTournamentRule();
+            }
+            // Poof-Pente: plain five-in-a-row wins. Guarded so that if the placed stone
+            // was itself poofed away (its cell cleared), no five is possible -- mirrors
+            // SimplePoofPenteState.isGameOver returning false when the last move poofed.
+            if (this.abstractBoard[x][y] === player && this.#detectPenteOf(player, move)) {
+                this.winner = player;
             }
         } else if (this.game < 15) {
             let player = (((this.moves.length % 4) === 1) || ((this.moves.length % 4) === 0)) ? 1 : 2;
@@ -1487,7 +1641,7 @@ export class Game {
                 }
             }
         }
-        if (((j+2) < 19) && ((j-1) > -1)) { // down
+        if (((j+3) < 19) && ((j-1) > -1)) { // down
             if (this.abstractBoard[i][j+1] === myColor && this.abstractBoard[i][j+2] === myColor) {
                 if ((this.abstractBoard[i][j-1] === opponentColor) && (this.abstractBoard[i][j+3] === opponentColor)) {
                     this.abstractBoard[i][j+1] = 0;
@@ -1568,7 +1722,7 @@ export class Game {
         let col = Math.floor(rowCol / 19), row = rowCol % 19, i, j;
         i = row - 1;
         j = col;
-        while (i > 0 && i < 19 && j > 0 && j < 19 && !pente) {
+        while (i >= 0 && i < 19 && j >= 0 && j < 19 && !pente) {
         if (color === this.abstractBoard[i][j]) {
             penteCounter += 1;
             pente = (penteCounter > 4);
@@ -1579,7 +1733,7 @@ export class Game {
         }
         i = row + 1;
         j = col;
-        while (i > 0 && i < 19 && j > 0 && j < 19 && !pente) {
+        while (i >= 0 && i < 19 && j >= 0 && j < 19 && !pente) {
             if (color === this.abstractBoard[i][j]) {
                 penteCounter += 1;
                 pente = (penteCounter > 4);
@@ -1594,7 +1748,7 @@ export class Game {
         penteCounter = 1;
         i = row;
         j = col - 1;
-        while (i > 0 && i < 19 && j > 0 && j < 19 && !pente) {
+        while (i >= 0 && i < 19 && j >= 0 && j < 19 && !pente) {
             if (color === this.abstractBoard[i][j]) {
                 penteCounter += 1;
                 pente = (penteCounter > 4);
@@ -1605,7 +1759,7 @@ export class Game {
         }
         i = row;
         j = col + 1;
-        while (i > 0 && i < 19 && j > 0 && j < 19 && !pente) {
+        while (i >= 0 && i < 19 && j >= 0 && j < 19 && !pente) {
             if (color === this.abstractBoard[i][j]) {
                 penteCounter += 1;
                 pente = (penteCounter > 4);
@@ -1620,7 +1774,7 @@ export class Game {
         penteCounter = 1;
         i = row - 1;
         j = col - 1;
-        while (i > 0 && i < 19 && j > 0 && j < 19 && !pente) {
+        while (i >= 0 && i < 19 && j >= 0 && j < 19 && !pente) {
             if (color === this.abstractBoard[i][j]) {
                 penteCounter += 1;
                 pente = (penteCounter > 4);
@@ -1632,7 +1786,7 @@ export class Game {
         }
         i = row + 1;
         j = col + 1;
-        while (i > 0 && i < 19 && j > 0 && j < 19 && !pente) {
+        while (i >= 0 && i < 19 && j >= 0 && j < 19 && !pente) {
             if (color === this.abstractBoard[i][j]) {
                 penteCounter += 1;
                 pente = (penteCounter > 4);
@@ -1648,7 +1802,7 @@ export class Game {
         penteCounter = 1;
         i = row - 1;
         j = col + 1;
-        while (i > 0 && i < 19 && j > 0 && j < 19 && !pente) {
+        while (i >= 0 && i < 19 && j >= 0 && j < 19 && !pente) {
             if (color === this.abstractBoard[i][j]) {
                 penteCounter += 1;
                 pente = (penteCounter > 4);
@@ -1660,7 +1814,7 @@ export class Game {
         }
         i = row + 1;
         j = col - 1;
-        while (i > 0 && i < 19 && j > 0 && j < 19 && !pente) {
+        while (i >= 0 && i < 19 && j >= 0 && j < 19 && !pente) {
             if (color === this.abstractBoard[i][j]) {
                 penteCounter += 1;
                 pente = (penteCounter > 4);

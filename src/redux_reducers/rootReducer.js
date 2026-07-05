@@ -68,11 +68,9 @@ function mmaiApp (state = initialState, action) {
         case CHANGE_GAME:
             newGame = newState.game.newInstance();
             newGame.reset();
-            if (newGame.game === 1) {
-                newGame.setGame(3);
-            } else {
-                newGame.setGame(1);
-            }
+            // payload is the canonical variant id (1, 3, 11, 15, 25). Mirrors the
+            // old toggle's reset/start-new-game flow, just parameterised by the id.
+            newGame.setGame(parseInt(action.payload));
             newState.game = newGame;
             newState.started = false;
             newState.snack = undefined;

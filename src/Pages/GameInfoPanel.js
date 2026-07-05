@@ -39,8 +39,8 @@ const mapDispatchToProps = dispatch => {
         play_pressed: () => {
             dispatch({ type: START_GAME })
         },
-        change_game: () => {
-            dispatch({ type: CHANGE_GAME })
+        change_game: (event) => {
+            dispatch({ type: CHANGE_GAME, payload: event.target.value })
         },
         change_level: (event) => {
             dispatch({ type: CHANGE_LEVEL, payload: event.target.value })
@@ -144,9 +144,22 @@ const UnconnectedGameInfoPanel = (props) => {
                           style={{width: '100%', height: '100%'}}>
                         <Grid item xs>
                             <div style={{display: 'table', margin: '0 auto'}}>
-                                <Button variant="outlined" color="primary" onClick={change_game}>
-                                    change game
-                                </Button>
+                                <ListItem key='variant'>
+                                    <Select
+                                        onChange={change_game}
+                                        value={game.game}
+                                        input={
+                                            <OutlinedInput
+                                                name="variant"
+                                                id="outlined-variant-simple"
+                                            />
+                                        }
+                                    >
+                                        {[1, 3, 11, 15, 25].map(g =>
+                                            <MenuItem key={g} value={g}>{game.game_name(g)}</MenuItem>
+                                        )}
+                                    </Select>
+                                </ListItem>
                             </div>
                         </Grid>
                         <Grid item xs>
