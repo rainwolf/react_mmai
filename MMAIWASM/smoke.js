@@ -8,7 +8,7 @@ const aiJs = process.argv[2]; // absolute path to ai.js
 const dir = path.dirname(aiJs);
 const tmp = path.join(dir, '.smoke_ai.js');
 
-const games = [1, 2, 3, 4, 11, 13, 15, 25];
+const games = [1, 2, 3, 4, 11, 13, 15, 25, 26];
 const moves = [180, 161, 104, 200, 144, 198, 201];
 
 global.__SMOKE_M = {

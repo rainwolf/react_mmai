@@ -95,7 +95,10 @@ protected:
 	int bd[19][19], cc[20][7], p1d[24], p2d[24], p3d[24], cap2, cap3;
 
 	CPoint p1xy[24], pxy[24], p2xy[24], p3xy[24];
-	CPoint pPxy[9]; int pPd[9]; int capP; // poof: own stones vanishing with the played stone
+	CPoint pPxy[17]; int pPd[17]; int capP; // poof: own stones vanishing with the played stone (<=16 with triples)
+	int capPf; // poof: per-form referee bonus (pairFired+tripleFired, 0-2) set alongside capP;
+	           // consumed only in Score()'s own tail (same call that set it) so, unlike capP,
+	           // it needs no Eval() tcapP-style snapshot -- nested rescore Score() calls never read it.
 	int rowWin;                           // boat: Score() saw an (unclamped) >=5 row win this call
 	int pendN[20]; CPoint pendC[20][9];   // boat: provisional-run cells recorded per ply
 

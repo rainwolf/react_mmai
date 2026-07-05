@@ -573,25 +573,81 @@ void CAi::dmov() {
             if (x>=0 && x<size && y>=0 && y<size)
                 if (brd[0][x][y]==0) brd[0][x][y]=-1;
     
-    // chk poof (Poof-Pente/O-Pente): placed stone + one own neighbor flanked by enemies
+    // chk poof (Poof-Pente/O-Pente): the placed stone plus its own neighbors get
+    // sandwiched by enemies and vanish. Every poof form (pair + triple end/center)
+    // is detected against the pre-removal board, collected, then applied -- this
+    // mirrors the server's addMove, which stashes all hits in tempPoofed before
+    // applying any; with triples added a scan-and-remove pass could disturb a
+    // later form's neighbors. Credit follows GameClass (the React app's referee,
+    // authoritative for this app): #detectPoof (pair form) and #detectKeryoPoof
+    // (triple form) each add their OWN +1 bonus once, if any of their directions
+    // fired, on top of +1 per stone actually removed. removed_stones = deduped
+    // neighbors (qn) + 1 for the placed stone. A pure pair or pure triple poof
+    // fires only one form's bonus, so it still credits removed_stones (qn+1,
+    // numerically unchanged by this fix). A MIXED pair+triple poof fires BOTH
+    // forms' bonuses, so it credits removed_stones+1 (qn+2) -- one more than a
+    // pure poof, matching GameClass's double per-form bonus. Formula: qn +
+    // pairFired + tripleFired, each flag 0/1 for whether that form fired at all.
+    // NOTE the server's OPenteState over-credits differently again: +2 per
+    // firing DIRECTION (not per form) plus 1 for the placed stone, with no dedup,
+    // so it can double-count shared cells on multi-direction poofs; that server
+    // behavior is NOT mirrored here -- GameClass is authoritative for this app.
+    // Either way the placed stone is still removed exactly once; only the CREDIT
+    // arithmetic changes for the mixed case.
     if (cfg.poofPairs) {
-        int pdirs=0;
-        for (d=0; d<8; d++) {
-            c1=sx[tn]+dx[d];   c2=sy[tn]+dy[d];    // own neighbor
-            c3=c1+dx[d];       c4=c2+dy[d];        // far enemy flank
-            c5=sx[tn]-dx[d];   c6=sy[tn]-dy[d];    // near enemy flank (behind placed)
+        int qx[17], qy[17], qn=0, pairFired=0, tripleFired=0;
+        auto qpush = [&](int px, int py) {   // collect a poofed neighbor, deduped
+            if (qn>=17) return;
+            for (int qi=0; qi<qn; qi++) if (qx[qi]==px && qy[qi]==py) return;
+            qx[qn]=px; qy[qn]=py; qn++;
+        };
+        for (d=0; d<8; d++) {                            // pair form: own nbr at +1d
+            c1=sx[tn]+dx[d];   c2=sy[tn]+dy[d];          //   own neighbor  (+1d)
+            c3=c1+dx[d];       c4=c2+dy[d];              //   far enemy flank (+2d)
+            c5=sx[tn]-dx[d];   c6=sy[tn]-dy[d];          //   near enemy flank(-1d)
             if (c3>=0 && c3<size && c4>=0 && c4<size &&
                 c5>=0 && c5<size && c6>=0 && c6<size)
                 if (brd[0][c1][c2]==cp &&
                     brd[0][c3][c4]>0 && brd[0][c3][c4]!=cp &&
                     brd[0][c5][c6]>0 && brd[0][c5][c6]!=cp) {
-                    brd[0][c1][c2]=-1;
-                    pdirs++;
+                    qpush(c1, c2);
+                    pairFired=1;
                 }
         }
-        if (pdirs) {
+        if (cfg.poofTriples) {
+            for (d=0; d<8; d++) {                        // end form: own at +1d,+2d
+                c1=sx[tn]+dx[d];     c2=sy[tn]+dy[d];        //   own    (+1d)
+                c3=sx[tn]+2*dx[d];   c4=sy[tn]+2*dy[d];      //   own    (+2d)
+                c5=sx[tn]+3*dx[d];   c6=sy[tn]+3*dy[d];      //   enemy  (+3d)
+                c7=sx[tn]-dx[d];     c8=sy[tn]-dy[d];        //   enemy  (-1d)
+                if (c5>=0 && c5<size && c6>=0 && c6<size &&
+                    c7>=0 && c7<size && c8>=0 && c8<size)
+                    if (brd[0][c1][c2]==cp && brd[0][c3][c4]==cp &&
+                        brd[0][c5][c6]>0 && brd[0][c5][c6]!=cp &&
+                        brd[0][c7][c8]>0 && brd[0][c7][c8]!=cp) {
+                        qpush(c1, c2); qpush(c3, c4);
+                        tripleFired=1;
+                    }
+            }
+            for (d=0; d<4; d++) {                        // center form: own at +1a,-1a
+                c1=sx[tn]+dx[d];     c2=sy[tn]+dy[d];        //   own    (+1a)
+                c3=sx[tn]-dx[d];     c4=sy[tn]-dy[d];        //   own    (-1a)
+                c5=sx[tn]+2*dx[d];   c6=sy[tn]+2*dy[d];      //   enemy  (+2a)
+                c7=sx[tn]-2*dx[d];   c8=sy[tn]-2*dy[d];      //   enemy  (-2a)
+                if (c5>=0 && c5<size && c6>=0 && c6<size &&
+                    c7>=0 && c7<size && c8>=0 && c8<size)
+                    if (brd[0][c1][c2]==cp && brd[0][c3][c4]==cp &&
+                        brd[0][c5][c6]>0 && brd[0][c5][c6]!=cp &&
+                        brd[0][c7][c8]>0 && brd[0][c7][c8]!=cp) {
+                        qpush(c1, c2); qpush(c3, c4);
+                        tripleFired=1;
+                    }
+            }
+        }
+        if (qn) {                                        // apply: remove neighbors + placed
+            for (int qi=0; qi<qn; qi++) brd[0][qx[qi]][qy[qi]]=-1;
             brd[0][sx[tn]][sy[tn]]=-1;
-            ccc[0][3-cp]+=pdirs+1;   // mover's lost stones credit the opponent
+            ccc[0][3-cp]+=qn+pairFired+tripleFired;      // removed stones + per-form referee bonus
         }
     }
 
@@ -851,7 +907,10 @@ int CAi::Tree() {
     int minscr, ctfl, mxlv, mxor[19];
     int mv[19], mvsco[19][363][7], mvscr[19][363], mvlst[19][363];
     int scr[19][7], hmv[19], mxmv[19], exstkx[19][36], exstky[19][36];
-    int nstk[19], ncap[19], capx[19][24], capy[19][24], capv[19][24];
+    // capx/capy/capv widened 24->48: an O-Pente move can mix per-direction
+    // captures and poofs across directions (e.g. some dirs capture-3, others
+    // poof-2), so the shared undo stack can exceed the old 24-push worst case.
+    int nstk[19], ncap[19], capx[19][48], capy[19][48], capv[19][48];
     // scr[0] is the computers final score after the search
     // hmv is the best move found in the format x+y*19
     int *pmvscr, *pmv, *pmxmv, *pmvlst, *pmxor, *pexfl, *pexel;
@@ -1062,13 +1121,20 @@ int CAi::Tree() {
                 HValY[lvl] ^= (bd[x][y]*TableY[x+y*19]);
 #endif
 
-                // chk poof — see dmov(); poof pushes share the generic capture undo
-                // stack. capx/capy/capv[24]: per direction either a capture (2 pushes)
-                // or a poof (1 push), mutually exclusive, so max 16/24 pushes as before.
+                // chk poof — see dmov() for the credit convention (GameClass
+                // per-form +1 bonus, on top of +1 per stone removed) and the
+                // collect-then-apply rationale. Poof pushes share the generic
+                // capture undo stack; each collected neighbor is one push
+                // (capv=fr, restored as an own stone).
                 ncap[lvl]=0;
                 if (cfg.poofPairs) {
-                    int pdirs=0;
-                    for (d=0; d<8; d++) {
+                    int qx[17], qy[17], qn=0, pairFired=0, tripleFired=0;
+                    auto qpush = [&](int px, int py) {
+                        if (qn>=17) return;
+                        for (int qi=0; qi<qn; qi++) if (qx[qi]==px && qy[qi]==py) return;
+                        qx[qn]=px; qy[qn]=py; qn++;
+                    };
+                    for (d=0; d<8; d++) {                        // pair form
                         c1=x+dx[d];  c2=y+dy[d];
                         c3=c1+dx[d]; c4=c2+dy[d];
                         c5=x-dx[d];  c6=y-dy[d];
@@ -1077,24 +1143,57 @@ int CAi::Tree() {
                             if (bd[c1][c2]==fr &&
                                 bd[c3][c4]>0 && bd[c3][c4]!=fr &&
                                 bd[c5][c6]>0 && bd[c5][c6]!=fr) {
-                                capx[lvl][ncap[lvl]]=c1;
-                                capy[lvl][ncap[lvl]]=c2;
-                                capv[lvl][ncap[lvl]++]=fr;   // restore as OWN stone
-                                bd[c1][c2]=-1;
-#if HASH == 1
-                                HValX[lvl] ^= (fr*TableX[c1+19*c2]);
-                                HValY[lvl] ^= (fr*TableY[c1+19*c2]);
-#endif
-                                pdirs++;
+                                qpush(c1, c2);
+                                pairFired=1;
                             }
                     }
-                    if (pdirs) {
+                    if (cfg.poofTriples) {
+                        for (d=0; d<8; d++) {                    // end form: own at +1d,+2d
+                            c1=x+dx[d];    c2=y+dy[d];
+                            c3=x+2*dx[d];  c4=y+2*dy[d];
+                            c5=x+3*dx[d];  c6=y+3*dy[d];
+                            c7=x-dx[d];    c8=y-dy[d];
+                            if (c5>=0 && c5<19 && c6>=0 && c6<19 &&
+                                c7>=0 && c7<19 && c8>=0 && c8<19)
+                                if (bd[c1][c2]==fr && bd[c3][c4]==fr &&
+                                    bd[c5][c6]>0 && bd[c5][c6]!=fr &&
+                                    bd[c7][c8]>0 && bd[c7][c8]!=fr) {
+                                    qpush(c1, c2); qpush(c3, c4);
+                                    tripleFired=1;
+                                }
+                        }
+                        for (d=0; d<4; d++) {                    // center form: own at +1a,-1a
+                            c1=x+dx[d];    c2=y+dy[d];
+                            c3=x-dx[d];    c4=y-dy[d];
+                            c5=x+2*dx[d];  c6=y+2*dy[d];
+                            c7=x-2*dx[d];  c8=y-2*dy[d];
+                            if (c5>=0 && c5<19 && c6>=0 && c6<19 &&
+                                c7>=0 && c7<19 && c8>=0 && c8<19)
+                                if (bd[c1][c2]==fr && bd[c3][c4]==fr &&
+                                    bd[c5][c6]>0 && bd[c5][c6]!=fr &&
+                                    bd[c7][c8]>0 && bd[c7][c8]!=fr) {
+                                    qpush(c1, c2); qpush(c3, c4);
+                                    tripleFired=1;
+                                }
+                        }
+                    }
+                    if (qn) {
+                        for (int qi=0; qi<qn; qi++) {
+                            capx[lvl][ncap[lvl]]=qx[qi];
+                            capy[lvl][ncap[lvl]]=qy[qi];
+                            capv[lvl][ncap[lvl]++]=fr;   // restore as OWN stone
+                            bd[qx[qi]][qy[qi]]=-1;
+#if HASH == 1
+                            HValX[lvl] ^= (fr*TableX[qx[qi]+19*qy[qi]]);
+                            HValY[lvl] ^= (fr*TableY[qx[qi]+19*qy[qi]]);
+#endif
+                        }
                         bd[x][y]=-1;   // restore paths blindly reset played cell to -1
 #if HASH == 1
                         HValX[lvl] ^= (fr*TableX[x+19*y]);   // reverse the placement XOR
                         HValY[lvl] ^= (fr*TableY[x+19*y]);
 #endif
-                        cc[lvl][3-fr]+=pdirs+1;
+                        cc[lvl][3-fr]+=qn+pairFired+tripleFired;   // removed stones + per-form bonus
                     }
                 }
 
@@ -1487,6 +1586,7 @@ int CAi::Score(CPoint pt) {
     y=pt.y;
     cap1=cap2=cap3=0;
     capP=0;
+    capPf=0;
     rowWin=0;
     c4=c5=0;
     dv=0;
@@ -1494,21 +1594,58 @@ int CAi::Score(CPoint pt) {
     hlim=4;
     if (cfg.captureTriples) hlim=5;
 
-    if (cfg.poofPairs && !gf) {  // poof scan: own neighbor flanked by enemies through played pt
-        for (i=0; i<8; i++) {
-            int n1x=x+dx[i],   n1y=y+dy[i];      // own neighbor
-            int f1x=x+2*dx[i], f1y=y+2*dy[i];    // far enemy flank
-            int f2x=x-dx[i],   f2y=y-dy[i];      // enemy behind the played point
+    if (cfg.poofPairs && !gf) {  // poof scan: own neighbors sandwiched by enemies vanish
+        // collect a poofed neighbor (deduped, axis-tagged for Eval's rescore loop)
+        auto pPush = [&](int px, int py, int ax) {
+            if (capP>=17) return;
+            for (int qi=0; qi<capP; qi++) if (pPxy[qi].x==px && pPxy[qi].y==py) return;
+            pPxy[capP].x=px; pPxy[capP].y=py; pPd[capP]=ax; capP++;
+        };
+        int pf=0, tf=0;   // per-form referee bonus flags (see dmov()'s pairFired/tripleFired)
+        for (i=0; i<8; i++) {                            // pair form
+            int n1x=x+dx[i],   n1y=y+dy[i];              //   own neighbor (+1d)
+            int f1x=x+2*dx[i], f1y=y+2*dy[i];            //   far enemy    (+2d)
+            int f2x=x-dx[i],   f2y=y-dy[i];              //   near enemy   (-1d)
             if (f1x>=0 && f1x<19 && f1y>=0 && f1y<19 &&
                 f2x>=0 && f2x<19 && f2y>=0 && f2y<19)
                 if (bd[n1x][n1y]==fr &&
                     bd[f1x][f1y]>0 && bd[f1x][f1y]!=fr &&
                     bd[f2x][f2y]>0 && bd[f2x][f2y]!=fr) {
-                    pPxy[capP].x=n1x; pPxy[capP].y=n1y;
-                    pPd[capP]=i%4;   // axis index for the Eval rescoring shortcut
-                    capP++;
+                    pPush(n1x, n1y, i%4);
+                    pf=1;
                 }
         }
+        if (cfg.poofTriples) {
+            for (i=0; i<8; i++) {                        // end form: own at +1d,+2d
+                int e1x=x+dx[i],   e1y=y+dy[i];
+                int e2x=x+2*dx[i], e2y=y+2*dy[i];
+                int e3x=x+3*dx[i], e3y=y+3*dy[i];        //   far enemy (+3d)
+                int e4x=x-dx[i],   e4y=y-dy[i];          //   near enemy(-1d)
+                if (e3x>=0 && e3x<19 && e3y>=0 && e3y<19 &&
+                    e4x>=0 && e4x<19 && e4y>=0 && e4y<19)
+                    if (bd[e1x][e1y]==fr && bd[e2x][e2y]==fr &&
+                        bd[e3x][e3y]>0 && bd[e3x][e3y]!=fr &&
+                        bd[e4x][e4y]>0 && bd[e4x][e4y]!=fr) {
+                        pPush(e1x, e1y, i%4); pPush(e2x, e2y, i%4);
+                        tf=1;
+                    }
+            }
+            for (i=0; i<4; i++) {                        // center form: own at +1a,-1a
+                int e1x=x+dx[i],   e1y=y+dy[i];
+                int e2x=x-dx[i],   e2y=y-dy[i];
+                int e3x=x+2*dx[i], e3y=y+2*dy[i];        //   enemy (+2a)
+                int e4x=x-2*dx[i], e4y=y-2*dy[i];        //   enemy (-2a)
+                if (e3x>=0 && e3x<19 && e3y>=0 && e3y<19 &&
+                    e4x>=0 && e4x<19 && e4y>=0 && e4y<19)
+                    if (bd[e1x][e1y]==fr && bd[e2x][e2y]==fr &&
+                        bd[e3x][e3y]>0 && bd[e3x][e3y]!=fr &&
+                        bd[e4x][e4y]>0 && bd[e4x][e4y]!=fr) {
+                        pPush(e1x, e1y, i%4); pPush(e2x, e2y, i%4);
+                        tf=1;
+                    }
+            }
+        }
+        capPf=pf+tf;   // 0-2: consumed below, in this same Score() call's tail
     }
 
     do { //c0
@@ -1801,8 +1938,8 @@ int CAi::Score(CPoint pt) {
     sco[fr]-=s0; //is subtracted in eval
     if (cfg.poofPairs && capP>0) {
         if (sco[fr]>=10000) sco[fr]=sco[fr]/8; // row "win" poofs away with the stone
-        s0=(capP+1)*160;                       // material handed to the opponent
-        if (cc[lvl][3-fr]+capP+1>=cfg.capWinCount) s0+=11000; // poof gifts capture win
+        s0=(capP+capPf)*160;                       // material handed to the opponent (+1 per fired form)
+        if (cc[lvl][3-fr]+capP+capPf>=cfg.capWinCount) s0+=11000; // poof gifts capture win
         sco[3-fr]+=s0;
     }
     // Boat: a completed five only wins outright when some >=5 run through the
@@ -1894,6 +2031,47 @@ int CAi::boatRunProof(int x, int y, int p) {
                 int bEnemy=(bv>0 && bv!=p), bEmpty=(bv<=0);
                 if ((fEnemy && bEmpty) || (fEmpty && bEnemy)) { breakable=1; break; }
             }
+            // Keryo/O-Pente: a run stone is ALSO breakable if a TRIPLE through it
+            // is capturable (mirrors OPenteState.isGameOver's length-3 checks).
+            // Same (x,y)-counts-as-p convention as the pair form above.
+            if (cfg.captureTriples && !breakable)
+                for (int k=0; k<8 && !breakable; k++) {
+                    int p1x=sxc+dx[k],   p1y=syc+dy[k];      // +1k
+                    int p2x=sxc+2*dx[k], p2y=syc+2*dy[k];    // +2k
+                    int p3x=sxc+3*dx[k], p3y=syc+3*dy[k];    // +3k
+                    int m1x=sxc-dx[k],   m1y=syc-dy[k];      // -1k
+                    int m2x=sxc-2*dx[k], m2y=syc-2*dy[k];    // -2k
+                    // END: S,+k,+2k own; flanks -k and +3k are {enemy, empty}
+                    if (p1x>=0&&p1x<19&&p1y>=0&&p1y<19 &&
+                        p2x>=0&&p2x<19&&p2y>=0&&p2y<19 &&
+                        p3x>=0&&p3x<19&&p3y>=0&&p3y<19 &&
+                        m1x>=0&&m1x<19&&m1y>=0&&m1y<19) {
+                        int a1=(p1x==x&&p1y==y)?p:bd[p1x][p1y];
+                        int a2=(p2x==x&&p2y==y)?p:bd[p2x][p2y];
+                        if (a1==p && a2==p) {
+                            int fv=(p3x==x&&p3y==y)?p:bd[p3x][p3y];
+                            int bv=(m1x==x&&m1y==y)?p:bd[m1x][m1y];
+                            int fEnemy=(fv>0&&fv!=p), fEmpty=(fv<=0);
+                            int bEnemy=(bv>0&&bv!=p), bEmpty=(bv<=0);
+                            if ((fEnemy&&bEmpty)||(fEmpty&&bEnemy)) { breakable=1; break; }
+                        }
+                    }
+                    // CENTER: +k,-k own; flanks +2k and -2k are {enemy, empty}
+                    if (p1x>=0&&p1x<19&&p1y>=0&&p1y<19 &&
+                        m1x>=0&&m1x<19&&m1y>=0&&m1y<19 &&
+                        p2x>=0&&p2x<19&&p2y>=0&&p2y<19 &&
+                        m2x>=0&&m2x<19&&m2y>=0&&m2y<19) {
+                        int a1=(p1x==x&&p1y==y)?p:bd[p1x][p1y];
+                        int b1=(m1x==x&&m1y==y)?p:bd[m1x][m1y];
+                        if (a1==p && b1==p) {
+                            int fv=(p2x==x&&p2y==y)?p:bd[p2x][p2y];
+                            int bv=(m2x==x&&m2y==y)?p:bd[m2x][m2y];
+                            int fEnemy=(fv>0&&fv!=p), fEmpty=(fv<=0);
+                            int bEnemy=(bv>0&&bv!=p), bEmpty=(bv<=0);
+                            if ((fEnemy&&bEmpty)||(fEmpty&&bEnemy)) { breakable=1; break; }
+                        }
+                    }
+                }
         }
         if (!breakable) return 1;       // a clean >=5 run -> genuine win
     }
