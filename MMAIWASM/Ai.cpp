@@ -13,6 +13,49 @@ int arc4random_uniform(int r) {
 	return rand()%r;
 }
 
+VariantConfig CAi::configFor(int gameId) {
+	// Canonical server IDs (GridStateFactory): Pente=1, Keryo=3, Poof=11,
+	// Connect6=13, Boat=15, O-Pente=25. Even IDs are Speed twins with the
+	// same board rules. Legacy engine callers pass 2 for Keryo (kept for
+	// backward compat with the current saga, shadowing canonical Speed-Pente).
+	// Unknown/unmapped IDs (incl. 0, negatives, D-Pente=5, G-Pente=7...)
+	// silently fall back to plain Pente rules below.
+	int base = gameId;
+	if (base == 2) base = 3;
+	else if (base > 2 && base % 2 == 0) base -= 1;
+
+	VariantConfig c;
+	switch (base) {
+		case 3: // Keryo-Pente
+			c.captureTriples = true;
+			c.capWinCount = 15;
+			break;
+		case 11: // Poof-Pente
+			c.poofPairs = true;
+			break;
+		case 13: // Connect6 — mechanics gated only; NOT playable yet (plan §4)
+			c.capturePairs = false;
+			c.winRowLength = 6;
+			c.stonesPerTurn = 2;
+			c.tournamentOpening = false;
+			break;
+		case 15: // Boat-Pente
+			c.boatWin = true;
+			break;
+		case 25: // O-Pente
+			c.captureTriples = true;
+			c.capWinCount = 15;
+			c.poofPairs = true;
+			c.poofTriples = true;
+			c.boatWin = true;
+			break;
+		case 1: // Pente
+		default:
+			break;
+	}
+	return c;
+}
+
 CAi::CAi(int game1, int lvl, bool openingBook1) {
 	if (openingBook1) {
 		this->obfl = 1;
@@ -20,7 +63,7 @@ CAi::CAi(int game1, int lvl, bool openingBook1) {
 		this->obfl = 0;
 	}
 	this->level = lvl;
-	this->game = game1;
+	this->cfg = configFor(game1);
 
 //     int x, y,z;
 //     pAt = ATbl;
@@ -329,9 +372,6 @@ void CAi::reset() {
 // void CAi::setLevel(int lvl) {
 // 	this->level = lvl;
 // }
-// void CAi::setGame(int g) {
-// 	this->game = g;
-// }
 
 // void CAi::Print(void)
 // {
@@ -404,10 +444,6 @@ int CAi::Move() { // AI MAIN routine
     
     //pView=pDoc->pView;
     gf=0;
-    Kgame=0; //1 = K-pente
-    if (game == 2) {
-        Kgame = 1;
-    }
     multipbem=0;
     np=2;
     
@@ -424,7 +460,7 @@ int CAi::Move() { // AI MAIN routine
                   ///////////////////////////////////////////////////////////////
     
     vct=1; //threat search
-    tourn=1; //tournament rule
+    tourn=cfg.tournamentOpening ? 1 : 0; //tournament rule
     breadth=1;
     extent=0;
     //int mxvt[13]={0,1,3,4,6,7,8,9,10,12,13,14,15};
@@ -520,7 +556,30 @@ void CAi::dmov() {
             if (x>=0 && x<size && y>=0 && y<size)
                 if (brd[0][x][y]==0) brd[0][x][y]=-1;
     
+    // chk poof (Poof-Pente/O-Pente): placed stone + one own neighbor flanked by enemies
+    if (cfg.poofPairs) {
+        int pdirs=0;
+        for (d=0; d<8; d++) {
+            c1=sx[tn]+dx[d];   c2=sy[tn]+dy[d];    // own neighbor
+            c3=c1+dx[d];       c4=c2+dy[d];        // far enemy flank
+            c5=sx[tn]-dx[d];   c6=sy[tn]-dy[d];    // near enemy flank (behind placed)
+            if (c3>=0 && c3<size && c4>=0 && c4<size &&
+                c5>=0 && c5<size && c6>=0 && c6<size)
+                if (brd[0][c1][c2]==cp &&
+                    brd[0][c3][c4]>0 && brd[0][c3][c4]!=cp &&
+                    brd[0][c5][c6]>0 && brd[0][c5][c6]!=cp) {
+                    brd[0][c1][c2]=-1;
+                    pdirs++;
+                }
+        }
+        if (pdirs) {
+            brd[0][sx[tn]][sy[tn]]=-1;
+            ccc[0][3-cp]+=pdirs+1;   // mover's lost stones credit the opponent
+        }
+    }
+
     // chk captures
+    if (cfg.capturePairs) {
     for (d=0; d<8; d++) {
         c1=sx[tn]+dx[d];
         c2=sy[tn]+dy[d];
@@ -539,7 +598,7 @@ void CAi::dmov() {
                     brd[0][c3][c4]=-1;
                 }
                 else {
-                    if (c7>=0 && c7<size && c8>=0 && c8<size && game==2)
+                    if (c7>=0 && c7<size && c8>=0 && c8<size && cfg.captureTriples)
                         if (brd[0][c7][c8]==cp && brd[0][c5][c6]>0) {
                             ccc[0][cp]+=3;
                             brd[0][c1][c2]=-1;
@@ -549,7 +608,8 @@ void CAi::dmov() {
                 }
             } // if en*2
     }  // next d
-    
+    } // if capturePairs
+
     if (tn==1) {
         xoff=yoff=-size/2;
     }
@@ -978,9 +1038,45 @@ int CAi::Tree() {
                 HValX[lvl] ^= (bd[x][y]*TableX[x+y*19]);
                 HValY[lvl] ^= (bd[x][y]*TableY[x+y*19]);
 #endif
-                
-                // chk capture
+
+                // chk poof — see dmov(); poof pushes share the generic capture undo
+                // stack. capx/capy/capv[24]: per direction either a capture (2 pushes)
+                // or a poof (1 push), mutually exclusive, so max 16/24 pushes as before.
                 ncap[lvl]=0;
+                if (cfg.poofPairs) {
+                    int pdirs=0;
+                    for (d=0; d<8; d++) {
+                        c1=x+dx[d];  c2=y+dy[d];
+                        c3=c1+dx[d]; c4=c2+dy[d];
+                        c5=x-dx[d];  c6=y-dy[d];
+                        if (c3>=0 && c3<19 && c4>=0 && c4<19 &&
+                            c5>=0 && c5<19 && c6>=0 && c6<19)
+                            if (bd[c1][c2]==fr &&
+                                bd[c3][c4]>0 && bd[c3][c4]!=fr &&
+                                bd[c5][c6]>0 && bd[c5][c6]!=fr) {
+                                capx[lvl][ncap[lvl]]=c1;
+                                capy[lvl][ncap[lvl]]=c2;
+                                capv[lvl][ncap[lvl]++]=fr;   // restore as OWN stone
+                                bd[c1][c2]=-1;
+#if HASH == 1
+                                HValX[lvl] ^= (fr*TableX[c1+19*c2]);
+                                HValY[lvl] ^= (fr*TableY[c1+19*c2]);
+#endif
+                                pdirs++;
+                            }
+                    }
+                    if (pdirs) {
+                        bd[x][y]=-1;   // restore paths blindly reset played cell to -1
+#if HASH == 1
+                        HValX[lvl] ^= (fr*TableX[x+19*y]);   // reverse the placement XOR
+                        HValY[lvl] ^= (fr*TableY[x+19*y]);
+#endif
+                        cc[lvl][3-fr]+=pdirs+1;
+                    }
+                }
+
+                // chk capture
+                if (cfg.capturePairs) {
                 for (d=0; d<8; d++) {
                     c1=x+dx[d];
                     c2=y+dy[d];
@@ -1013,7 +1109,7 @@ int CAi::Tree() {
                                 
                             }
                             else {
-                                if (c7>=0 && c7<19 && c8>=0 && c8<19 && Kgame)
+                                if (c7>=0 && c7<19 && c8>=0 && c8<19 && cfg.captureTriples)
                                     if (bd[c7][c8]==fr && bd[c5][c6]>0) {
                                         cc[lvl][fr]+=3;
                                         capx[lvl][ncap[lvl]]=c1;
@@ -1041,8 +1137,9 @@ int CAi::Tree() {
                             }
                         } // if en*2
                 } // next d
-                
-#if HASH == 1	
+                } // if capturePairs
+
+#if HASH == 1
                 htempx=(HValX[lvl] ^(TableX[361]*(cc[lvl][1]+cc[lvl][2])))%1000000;
                 htempy= HValY[lvl] ^(TableY[361]*(cc[lvl][1]+cc[lvl][2]));
                 if (*(pHashY+htempx)==htempy && np<3)
@@ -1229,6 +1326,7 @@ int CAi::Eval(int x, int y) {
         x9=x; y9=y;
         tfr=fr;
         tcap1=cap1;
+        int tcapP=capP; //poofed own stones (initial Score set capP; nested Score calls clobber it)
         for (bl=0; bl<tcap1; bl++ ) { //score captured
             x=p1xy[bl].x; y=p1xy[bl].y;
             ppd=p1d[bl];
@@ -1267,6 +1365,20 @@ int CAi::Eval(int x, int y) {
             s0=Score(pt);
             s[1]+=sco[1]/8;
             s[2]+=sco[2]/8;
+        } // next bl
+        int tcapP2=tcapP;
+        for (bl=0; bl<tcapP2; bl++ ) { //poofed - own stones vanish
+            x=pPxy[bl].x; y=pPxy[bl].y;
+            ppd=pPd[bl];
+            if (ppd>4) ppd=ppd-4;
+            fr=tfr;
+            pt.x=x;
+            pt.y=y;
+            s0=Score(pt);
+            sco[1]=sco[1]-sco[1]/10;
+            sco[2]=sco[2]-sco[2]/10;
+            s[1]-=sco[1];
+            s[2]-=sco[2];
         } // next bl
         fr=tfr;
         x=x9; y=y9;
@@ -1307,12 +1419,30 @@ int CAi::Score(CPoint pt) {
     x=pt.x;
     y=pt.y;
     cap1=cap2=cap3=0;
+    capP=0;
     c4=c5=0;
     dv=0;
     for (i=1; i<7; i++) sco[i]=c3[i]=0;
     hlim=4;
-    if (Kgame) hlim=5;
-    
+    if (cfg.captureTriples) hlim=5;
+
+    if (cfg.poofPairs && !gf) {  // poof scan: own neighbor flanked by enemies through played pt
+        for (i=0; i<8; i++) {
+            int n1x=x+dx[i],   n1y=y+dy[i];      // own neighbor
+            int f1x=x+2*dx[i], f1y=y+2*dy[i];    // far enemy flank
+            int f2x=x-dx[i],   f2y=y-dy[i];      // enemy behind the played point
+            if (f1x>=0 && f1x<19 && f1y>=0 && f1y<19 &&
+                f2x>=0 && f2x<19 && f2y>=0 && f2y<19)
+                if (bd[n1x][n1y]==fr &&
+                    bd[f1x][f1y]>0 && bd[f1x][f1y]!=fr &&
+                    bd[f2x][f2y]>0 && bd[f2x][f2y]!=fr) {
+                    pPxy[capP].x=n1x; pPxy[capP].y=n1y;
+                    pPd[capP]=i%4;   // axis index for the Eval rescoring shortcut
+                    capP++;
+                }
+        }
+    }
+
     do { //c0
         if (gf==1 && dv==ppd) { //just need c4 - eval captured stone
             for (sign=-1; sign<2; sign+=2) { //look for captures
@@ -1330,7 +1460,7 @@ int CAi::Score(CPoint pt) {
                     if (la[2]>0 && la[2]!=fr) { //b0
                         if (la[3]==fr) c4+=2; //pair now open for capture
                         if (!la[3]) c5+=2; //pair no longer open for capture
-                        if (la[3]>0 && la[3]!=fr && Kgame) {
+                        if (la[3]>0 && la[3]!=fr && cfg.captureTriples) {
                             if (la[4]==fr) c4+=3;
                             if (!la[4]) c5+=3;
                         }
@@ -1360,7 +1490,7 @@ int CAi::Score(CPoint pt) {
                     if (!la[2]) g1=6;
                     if (la[2]==fr && !la[3]) g1=7;
                     if (la[2]==fr && np==2 && !gf) { //protected pair
-                        if (la[3]>0 && la[3]!=fr && !Kgame) { //g1=9
+                        if (la[3]>0 && la[3]!=fr && !cfg.captureTriples) { //g1=9
                             for (i=1; i<3; i++) {
                                 p3xy[cap3].x=x+dx[dv]*sign*i;
                                 p3xy[cap3].y=y+dy[dv]*sign*i;
@@ -1398,7 +1528,7 @@ int CAi::Score(CPoint pt) {
                             g1=0;
                             c4+=2;
                         }
-                        if (la[3]>0 && la[3]!=fr && Kgame) {
+                        if (la[3]>0 && la[3]!=fr && cfg.captureTriples) {
                             if (la[4]==fr && !gf) {
                                 g1=5;
                                 for (i=1; i<4; i++) {
@@ -1432,50 +1562,50 @@ int CAi::Score(CPoint pt) {
             if (g[1]==8 || g[1]==3 || g[1]==5) sp[1]=1;
             for (i=0; i<2; i++) {
                 if (g[i]==6 && sp[1-i]) { // pairs
-                    if (Kgame) sco[fr]-=20;
+                    if (cfg.captureTriples) sco[fr]-=20;
                     else sco[fr]-=12;
                 }
-                if (Kgame && g[i]==7 && sp[1-i]) sco[fr]-=12;
-                if (!Kgame && g[i]==7) sco[fr]+=12;
+                if (cfg.captureTriples && g[i]==7 && sp[1-i]) sco[fr]-=12;
+                if (!cfg.captureTriples && g[i]==7) sco[fr]+=12;
                 if (g[i]==2) { // threaten a pair
                     sco[fr]+=50;
-                    if (cc[lvl][fr]+cap1>Kgame*5+7) sco[fr]+=1024;
+                    if (cc[lvl][fr]+cap1>=cfg.capWinCount-2) sco[fr]+=1024;
                 }
-                if (Kgame && g[i]==4) {
+                if (cfg.captureTriples && g[i]==4) {
                     sco[fr]+=75;
-                    if (cc[lvl][fr]+cap1>Kgame*5+6) sco[fr]+=1024;
+                    if (cc[lvl][fr]+cap1>=cfg.capWinCount-3) sco[fr]+=1024;
                 }
             } // next i
-            if (Kgame && g[0]==6 && g[1]==6) sco[fr]-=12; //pair
+            if (cfg.captureTriples && g[0]==6 && g[1]==6) sco[fr]-=12; //pair
             for (iw=0; iw<5; iw+=4) { // O = played
                 for (i=1; i<=np; i++) { // Z = potential capturer
                     if (i!=fr && lb[iw+1]>0 && lb[iw+2]>0) // OXYZ
                         if (lb[iw+1]!=i && lb[iw+2]!=i) { // protect
-                            if (lb[iw+3]==i && (!Kgame || lb[5-iw])) c3[i]+=2;
-                            if (Kgame && lb[iw+3]!=i && lb[iw+3]>0 && lb[iw+4]==i) c3[i]+=3;
+                            if (lb[iw+3]==i && (!cfg.captureTriples || lb[5-iw])) c3[i]+=2;
+                            if (cfg.captureTriples && lb[iw+3]!=i && lb[iw+3]>0 && lb[iw+4]==i) c3[i]+=3;
                         }
                 } // next i
                 i=lb[5-iw];
                 if (i>0 && i!=fr)
                     if (lb[iw+1]>0 && lb[iw+1]!=i) { // _XOZ
                         if (!lb[iw+2]) c2[i]+=2; // make suscept. pair
-                        if (Kgame && lb[iw+2]>0 && lb[iw+2]!=i && !lb[iw+3]) c2[i]+=3;
+                        if (cfg.captureTriples && lb[iw+2]>0 && lb[iw+2]!=i && !lb[iw+3]) c2[i]+=3;
                     }
                 i=lb[6-iw];
                 if (i>0 && i!=fr)
                     if (lb[5-iw]>0 && lb[5-iw]!=i) { // _OXZ
                         if (!lb[iw+1]) c2[i]+=2;
-                        if (Kgame && lb[iw+1]>0 && lb[iw+1]!=i && !lb[iw+2]) c2[i]+=3;
+                        if (cfg.captureTriples && lb[iw+1]>0 && lb[iw+1]!=i && !lb[iw+2]) c2[i]+=3;
                     }
                 i=lb[7-iw];
-                if (i>0 && i!=fr && Kgame) // _OXYZ
+                if (i>0 && i!=fr && cfg.captureTriples) // _OXYZ
                     if (lb[6-iw]>0 && lb[6-iw]!=i && lb[5-iw]>0 && lb[5-iw]!=i)
                         if (!lb[iw+1]) c2[i]+=3;
             } // next iw
             for (i=1; i<=np; i++) {
                 if (i!=fr) { // c2 is stones now able to take
                     s0=c2[i]*25;
-                    if (cc[lvl][i]+c2[i]>Kgame*5+9) s0=s0+2048;
+                    if (cc[lvl][i]+c2[i]>=cfg.capWinCount) s0=s0+2048;
                     sco[i]+=s0;
                 }
             } // next i
@@ -1591,16 +1721,23 @@ int CAi::Score(CPoint pt) {
     for (i=1; i<=np; i++) {
         if (i!=fr) { 
             s0=-c3[i]*25; // c3 is stones now blocked from capture
-            if (cc[lvl][i]+c3[i]>Kgame*5+9) s0=s0-1024;
+            if (cc[lvl][i]+c3[i]>=cfg.capWinCount) s0=s0-1024;
             sco[i]+=s0;
         }
     } // next i
     sco[fr]+=cap1*160; // captures
     s0=(c4-c5)*25; // c4 is stones now open for capture
-    if (cc[lvl][fr]+c4>Kgame*5+9) s0=s0+1024;
-    if (cc[lvl][fr]+c5>Kgame*5+9) s0=s0-1024;
+    if (cc[lvl][fr]+c4>=cfg.capWinCount) s0=s0+1024;
+    if (cc[lvl][fr]+c5>=cfg.capWinCount) s0=s0-1024;
     sco[fr]-=s0; //is subtracted in eval
-    if (cc[lvl][fr]+cap1>Kgame*5+9) sco[fr]=12000;
+    if (cfg.poofPairs && capP>0) {
+        if (sco[fr]>=10000) sco[fr]=sco[fr]/8; // row "win" poofs away with the stone
+        s0=(capP+1)*160;                       // material handed to the opponent
+        if (cc[lvl][3-fr]+capP+1>=cfg.capWinCount) s0+=11000; // poof gifts capture win
+        sco[3-fr]+=s0;
+    }
+    if (cc[lvl][fr]+cap1>=cfg.capWinCount
+        && (!cfg.poofPairs || cc[lvl][fr]+cap1>cc[lvl][3-fr])) sco[fr]=12000;
     
     if (sco[fr]>12000) sco[fr]=12000;
     s0=sco[fr];

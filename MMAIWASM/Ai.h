@@ -3,6 +3,24 @@
 #ifndef CAI
 #define CAI
 
+// Rule knobs for the game variants the engine can host. Populated once in
+// the CAi constructor from the canonical server game ID (GridStateFactory):
+// Pente=1, Keryo=3, Poof=11, Connect6=13, Boat=15, O-Pente=25; even IDs are
+// Speed twins with identical board rules. Legacy callers passing 2 get Keryo.
+struct VariantConfig {
+	bool capturePairs = true;       // gates capture MECHANICS in dmov/Tree only; Score/Eval
+	                                // still score capture patterns unconditionally, so
+	                                // Connect6 (false) is not playable until plan §4 lands
+	bool captureTriples = false;    // Keryo/O-Pente triple capture
+	int  capWinCount = 10;          // captured stones needed to win
+	bool poofPairs = false;         // Poof/O-Pente 2-stone poof; not consumed yet
+	bool poofTriples = false;       // O-Pente 3-stone poof; not consumed yet
+	bool boatWin = false;           // Boat/O-Pente provisional five; not consumed yet
+	int  winRowLength = 5;          // Connect6: 6; not consumed yet (pattern tables are 5-based)
+	int  stonesPerTurn = 1;         // Connect6: 2; not consumed yet
+	bool tournamentOpening = true;  // feeds 'tourn', which the engine currently never reads
+};
+
 class CAi {
 
 // Construction
@@ -10,8 +28,7 @@ public:
 	CAi(int game1, int lvl, bool openingBook1);
 
 // Attributes
-protected: 
-	int game;
+protected:
 	int level;
 	int seat;
 
@@ -59,8 +76,10 @@ protected:
 	    234,252,215,196,177,176,158,139,120,100,
 	    121,122,123,104,124,125,126,108,145,164};
 
-	int mxst=2, gf=0, Kgame=0, //1 = K-pente
+	int mxst=2, gf=0,
 	multipbem=0, np=2;
+
+	VariantConfig cfg;
 	unsigned long turn;
 
 	int fr, fhn, en, cap1, tourn;
@@ -76,6 +95,7 @@ protected:
 	int bd[19][19], cc[20][7], p1d[24], p2d[24], p3d[24], cap2, cap3;
 
 	CPoint p1xy[24], pxy[24], p2xy[24], p3xy[24];
+	CPoint pPxy[9]; int pPd[9]; int capP; // poof: own stones vanishing with the played stone
 
 
 	int ciel[20][7], mxnd[20], sec[3];
@@ -88,9 +108,11 @@ public:
 	int getMove(int *moves, int count);
 	// void setUseOpeningBook(bool book);
 	// void setLevel(int lvl);
-	// void setGame(int g);
+	// note: no setGame — cfg is derived from the game ID once, in the
+	// constructor; construct a fresh CAi to switch variants.
 
-protected: 
+protected:
+	static VariantConfig configFor(int gameId);
 	int Tree();
 	int Eval(int x, int y);
 	int Score(CPoint pt);  
