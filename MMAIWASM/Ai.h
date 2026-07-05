@@ -96,6 +96,8 @@ protected:
 
 	CPoint p1xy[24], pxy[24], p2xy[24], p3xy[24];
 	CPoint pPxy[9]; int pPd[9]; int capP; // poof: own stones vanishing with the played stone
+	int rowWin;                           // boat: Score() saw an (unclamped) >=5 row win this call
+	int pendN[20]; CPoint pendC[20][9];   // boat: provisional-run cells recorded per ply
 
 
 	int ciel[20][7], mxnd[20], sec[3];
@@ -115,7 +117,10 @@ protected:
 	static VariantConfig configFor(int gameId);
 	int Tree();
 	int Eval(int x, int y);
-	int Score(CPoint pt);  
+	int Score(CPoint pt);
+	int boatRunAxis(int x, int y, int p, int a, CPoint *cells); // boat: maximal own run on one axis
+	int boatRun(int x, int y, int p, CPoint *cells);            // boat: first axis whose run is >=5
+	int boatRunProof(int x, int y, int p);                      // boat: five has no capturable stone?
 	void reset();
 	int Move();
 	void dmov();

@@ -455,6 +455,23 @@ int CAi::Move() { // AI MAIN routine
             bd[x][y]=brd[0][x][y]; //BOARD
     cc[0][1]=ccc[0][1]; //current captured pieces p1
     cc[0][2]=ccc[0][2]; //current captured pieces p1
+
+    // Boat: the real last move (sx[tn-1],sy[tn-1]) belongs to the opponent and
+    // maps to search slot 0. fr at even search levels equals that opponent
+    // (fr=cp-1+lvl wrapped, np==2 -> fr(lvl2)=3-cp), so a five it left standing
+    // is enforced by Tree()'s lvl>=2 survived check. Zero every slot first so no
+    // pending state leaks between getMove() calls (cheap, keeps non-boat clean).
+    for (i=0; i<20; i++) pendN[i]=0;
+    // np==2 guard matches Tree()'s lvl>=2 survived check: np is set to 2
+    // just above and nothing between there and here can change it, but the
+    // guard is kept for consistency since lp=3-cp only makes sense for 2
+    // players (a future >2-player np would make it nonsense).
+    if (cfg.boatWin && np==2 && tn>=2) {
+        int lx=sx[tn-1], ly=sy[tn-1], lp=3-cp; // opponent = 3-cp
+        if (lx>=0 && lx<19 && ly>=0 && ly<19 && bd[lx][ly]==lp)
+            pendN[0]=boatRun(lx, ly, lp, pendC[0]);
+    }
+
     plv=level;  //depth of search 1-12
 //    gf=pDoc->gf;  //set to 0
                   ///////////////////////////////////////////////////////////////
@@ -842,8 +859,14 @@ int CAi::Tree() {
     int xx, yy, d, c1, c2, c3, c4, c5, c6, c7, c8, ct, sc;
     int shi, shj, shv, shw, inc, loc, tyt, tyf, tys;
     int htempx, cpx, cpy, cutfl;
-    
+
     unsigned int htempy;
+    // Boat: hash-key fold constants for the pending-run bits (Finding 1).
+    // Large odd constants, deliberately NOT TableX/TableY slots -- kept
+    // independent of the capture-count fold's table-driven constants.
+    const unsigned int PENDBIT1=2654435761u, PENDBIT2=2246822519u;
+    unsigned int pfold;
+    int pb1, pb2;
     
     hmv[0]=0;
     mvlst[1][0]=-1;
@@ -1139,9 +1162,32 @@ int CAi::Tree() {
                 } // next d
                 } // if capturePairs
 
+                // Boat: record the maximal own run this move completes, so the
+                // survived check two plies on can tell whether the opponent
+                // broke it. bd[x][y]==fr is required (a poof of the played
+                // stone in O-Pente leaves it -1) so no phantom five is stored.
+                pendN[lvl]=0;
+                if (cfg.boatWin && bd[x][y]==fr)
+                    pendN[lvl]=boatRun(x, y, fr, pendC[lvl]);
+
 #if HASH == 1
-                htempx=(HValX[lvl] ^(TableX[361]*(cc[lvl][1]+cc[lvl][2])))%1000000;
-                htempy= HValY[lvl] ^(TableY[361]*(cc[lvl][1]+cc[lvl][2]));
+                // Boat: fold in the pending-run state so a survived-win score
+                // computed on one path (pendN set) can never be probed/reused
+                // on a permuted path where the five is only just-completed
+                // (provisional, not yet won). Order: pendN[lvl] record (just
+                // above) -> pend-bit fold (here) -> hash probe (below), so the
+                // bits reflect this node's just-written pendN[lvl] and the
+                // still-valid pendN[lvl-1] from the parent ply. Local to the
+                // probe key only (pfold is never folded into HValX/HValY[lvl]
+                // themselves), so children -- which copy HValX[lvl]/HValY[lvl]
+                // as their base -- never double-accumulate it. pendN[lvl-2] is
+                // already consumed by the survived check below, so it is not
+                // re-folded here.
+                pb1 = (cfg.boatWin && pendN[lvl-1]>0) ? 1 : 0;
+                pb2 = (cfg.boatWin && pendN[lvl]>0) ? 1 : 0;
+                pfold = PENDBIT1*pb1 + PENDBIT2*pb2;
+                htempx=(HValX[lvl] ^(TableX[361]*(cc[lvl][1]+cc[lvl][2])) ^ pfold)%1000000;
+                htempy= HValY[lvl] ^(TableY[361]*(cc[lvl][1]+cc[lvl][2])) ^ pfold;
                 if (*(pHashY+htempx)==htempy && np<3)
                     if (*(pHashD+htempx)==lvl) { //found in table!
                         sc=*(pHashS+htempx*2+fr-1);
@@ -1151,7 +1197,22 @@ int CAi::Tree() {
                         hfl=1;
                     }
 #endif
-                
+
+                // Boat: if fr completed a five two plies ago (slot lvl-2) and it
+                // still has >=5 consecutive live stones, the opponent's reply
+                // failed to break it -> fr has already won, so every move here
+                // is a win. fr at level lvl equals fr at lvl-2 (np==2), so the
+                // recorded run's owner is exactly the current fr. Force the
+                // standard win path (clear any hash hit so it takes effect).
+                if (cfg.boatWin && np==2 && lvl>=2 && pendN[lvl-2]>0) {
+                    int streak=0, best=0, c;
+                    for (c=0; c<pendN[lvl-2]; c++)
+                        if (bd[pendC[lvl-2][c].x][pendC[lvl-2][c].y]==fr) {
+                            if (++streak>best) best=streak;
+                        } else streak=0;
+                    if (best>=5) { sc=12000; hfl=0; }
+                }
+
                 if (sc>=10000 && !hfl) { //check win
                     
                     scr[lvl][fr]=12000-lvl;
@@ -1211,9 +1272,15 @@ int CAi::Tree() {
                 hmv[lvl-1]=hmv[lvl];
 #if HASH == 1
                 if (lvl<mxlv) {
+                    // Same pend-bit fold as the probe above (Finding 1) --
+                    // must match exactly or a stored key would never be
+                    // found again by the probe for the same node.
+                    pb1 = (cfg.boatWin && pendN[lvl-1]>0) ? 1 : 0;
+                    pb2 = (cfg.boatWin && pendN[lvl]>0) ? 1 : 0;
+                    pfold = PENDBIT1*pb1 + PENDBIT2*pb2;
                     htempx=(HValX[lvl] ^ (TableX[361]*
-                                          (cc[lvl][1]+cc[lvl][2])))%1000000;
-                    htempy= HValY[lvl] ^(TableY[361]*(cc[lvl][1]+cc[lvl][2]));
+                                          (cc[lvl][1]+cc[lvl][2])) ^ pfold)%1000000;
+                    htempy= HValY[lvl] ^(TableY[361]*(cc[lvl][1]+cc[lvl][2])) ^ pfold;
                     *(pHashY+htempx)=htempy;
                     
                     if (scr[lvl][fr]==beta) //|| sc==alpha
@@ -1420,6 +1487,7 @@ int CAi::Score(CPoint pt) {
     y=pt.y;
     cap1=cap2=cap3=0;
     capP=0;
+    rowWin=0;
     c4=c5=0;
     dv=0;
     for (i=1; i<7; i++) sco[i]=c3[i]=0;
@@ -1716,10 +1784,11 @@ int CAi::Score(CPoint pt) {
         } //!dv==4
         
     } while (dv<4 && sco[fr]<10000); // c0
-    
-    
+
+    if (sco[fr]>=10000) rowWin=1; // boat: a genuine >=5 row win (not the tail's capture-win)
+
     for (i=1; i<=np; i++) {
-        if (i!=fr) { 
+        if (i!=fr) {
             s0=-c3[i]*25; // c3 is stones now blocked from capture
             if (cc[lvl][i]+c3[i]>=cfg.capWinCount) s0=s0-1024;
             sco[i]+=s0;
@@ -1736,12 +1805,98 @@ int CAi::Score(CPoint pt) {
         if (cc[lvl][3-fr]+capP+1>=cfg.capWinCount) s0+=11000; // poof gifts capture win
         sco[3-fr]+=s0;
     }
+    // Boat: a completed five only wins outright when some >=5 run through the
+    // played point has no pair-capturable stone; otherwise it is provisional --
+    // strong but nonterminal. Runs AFTER the poof clamp so a five already poofed
+    // away (O-Pente) is never re-promoted. Gated !gf so only the primary move
+    // eval decides terminality, not the nested capture-rescore Score() calls.
+    if (cfg.boatWin && !gf && rowWin && sco[fr]>=10000) {
+        // 9000 is nonterminal by design (it is deliberately kept below the
+        // >=10000 win threshold sco[fr] just failed above) -- and it carries
+        // no special magnitude either: Eval()'s else-branch clamps sco[] to
+        // 7800 before any consumer ever sees it, so this value only nudges
+        // move ordering within that clamp. Win enforcement for a provisional
+        // five is NOT carried by this score at all; it's carried by Tree()'s
+        // pendN/pendC survived-check mechanism two plies later.
+        if (!boatRunProof(x, y, fr)) sco[fr]=9000;
+    }
     if (cc[lvl][fr]+cap1>=cfg.capWinCount
         && (!cfg.poofPairs || cc[lvl][fr]+cap1>cc[lvl][3-fr])) sco[fr]=12000;
     
     if (sco[fr]>12000) sco[fr]=12000;
     s0=sco[fr];
-    
+
     return s0;
+}
+
+// ---- Boat-Pente provisional-five helpers --------------------------------
+// Collect the maximal own run (owner p) on axis a (a=0..3 select the four line
+// directions dx[a]/dy[a]) through (x,y), treating (x,y) itself as a p stone
+// even when the board cell is empty -- Score() evaluates a not-yet-placed
+// candidate. Cells are returned in axis order; length is capped at 9.
+int CAi::boatRunAxis(int x, int y, int p, int a, CPoint *cells) {
+    int nx=x, ny=y;
+    for (;;) {                          // walk to the negative end of the run
+        int px=nx-dx[a], py=ny-dy[a];
+        if (px<0 || px>=19 || py<0 || py>=19) break;
+        int v = (px==x && py==y) ? p : bd[px][py];
+        if (v!=p) break;
+        nx=px; ny=py;
+    }
+    int n=0, cx=nx, cy=ny;              // collect forward across the run
+    while (cx>=0 && cx<19 && cy>=0 && cy<19) {
+        int v = (cx==x && cy==y) ? p : bd[cx][cy];
+        if (v!=p) break;
+        cells[n].x=cx; cells[n].y=cy;
+        if (++n>=9) break;
+        cx+=dx[a]; cy+=dy[a];
+    }
+    return n;
+}
+
+// First axis whose maximal run through (x,y) is >=5; fills cells and returns
+// its length (0 if none). Used to record a pending five for the survived check.
+int CAi::boatRun(int x, int y, int p, CPoint *cells) {
+    for (int a=0; a<4; a++) {
+        int n=boatRunAxis(x,y,p,a,cells);
+        if (n>=5) return n;
+    }
+    return 0;
+}
+
+// True (proof) iff some >=5 run through (x,y) has NO pair-capturable stone.
+// Pair-capturability is tested per the oracle on the post-move board, so the
+// played point (x,y) counts as a p stone when it lands in a flank. Returns 1
+// (keep the win) when no >=5 run is found, so a five the pattern table saw is
+// never wrongly demoted; returns 0 only when every >=5 run is breakable.
+int CAi::boatRunProof(int x, int y, int p) {
+    CPoint run[9];
+    int foundRun=0;
+    for (int a=0; a<4; a++) {
+        int n=boatRunAxis(x,y,p,a,run);
+        if (n<5) continue;
+        foundRun=1;
+        int breakable=0;
+        for (int c=0; c<n && !breakable; c++) {
+            int sxc=run[c].x, syc=run[c].y;
+            for (int k=0; k<8; k++) {
+                int ax=sxc+dx[k],   ay=syc+dy[k];    // pair partner
+                int fx=sxc+2*dx[k], fy=syc+2*dy[k];  // far flank
+                int bx=sxc-dx[k],   by=syc-dy[k];    // near flank
+                if (ax<0||ax>=19||ay<0||ay>=19) continue;
+                if (fx<0||fx>=19||fy<0||fy>=19) continue;
+                if (bx<0||bx>=19||by<0||by>=19) continue;
+                int av=(ax==x&&ay==y)?p:bd[ax][ay];
+                if (av!=p) continue;                 // no own neighbour -> no pair
+                int fv=(fx==x&&fy==y)?p:bd[fx][fy];
+                int bv=(bx==x&&by==y)?p:bd[bx][by];
+                int fEnemy=(fv>0 && fv!=p), fEmpty=(fv<=0); // -1/0 = empty
+                int bEnemy=(bv>0 && bv!=p), bEmpty=(bv<=0);
+                if ((fEnemy && bEmpty) || (fEmpty && bEnemy)) { breakable=1; break; }
+            }
+        }
+        if (!breakable) return 1;       // a clean >=5 run -> genuine win
+    }
+    return foundRun ? 0 : 1;            // every >=5 run breakable -> provisional
 }
 
