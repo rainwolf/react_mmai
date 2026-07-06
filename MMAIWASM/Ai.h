@@ -21,11 +21,31 @@ struct VariantConfig {
 	bool tournamentOpening = true;  // feeds 'tourn', which the engine currently never reads
 };
 
+// Mobile portability hook seam. A host (Android NDK wrapper, future iOS
+// Objective-C++ shim) subclasses this and installs it via CAi::setListener to
+// observe the search. Mirrors the OLD Android engine's two JNI callbacks:
+//   * aiEvaluated()  -- old fired obj.aiEvaluatedCallBack() at the top of every
+//                       Eval(), UNCONDITIONALLY (not gated by the mask).
+//   * aiVisualization(data,len) -- old fired obj.aiVisualizationCallBack(int[])
+//                       at the top of Eval(), gated by the callbacks toggle,
+//                       with a flattened 19x19 board (data[x*19+y]==3 marks the
+//                       cell being evaluated). len is always 361 here.
+// When no listener is installed the engine makes NO calls and NO allocation, so
+// the WASM/default path is byte-identical to before this seam existed.
+struct CAiListener {
+	virtual void aiEvaluated() {}
+	virtual void aiVisualization(const int *data, int len) {}
+	virtual ~CAiListener() {}
+};
+
 class CAi {
 
 // Construction
 public:
-	CAi(int game1, int lvl, bool openingBook1);
+	// filesDir: directory holding pente.tbl / pente.scs / opngbk.pen. Defaults to
+	// "files" so the WASM/emscripten embed path is unchanged; the mobile wrappers
+	// pass their app resource dir. A trailing '/' is optional (handled either way).
+	CAi(int game1, int lvl, bool openingBook1, const char *filesDir = "files");
 
 // Attributes
 protected:
@@ -112,10 +132,44 @@ protected:
 
 	short int *pAs, *pAt;//*pPbk, *pKbk, *pPNm, *pPOs, *pKNm, *pKOs;
 
+	// --- mobile portability seam state (all inert unless a host opts in) ---
+	// stopfl is cleared once per getMove() call (see reset()), not per stone.
+	// Connect6 plays 2 stones in a single getMove() turn (cfg.stonesPerTurn==2);
+	// a requestStop() mid-turn therefore intentionally aborts BOTH stone
+	// searches -- this is a whole-turn abort, not a per-stone cancellation.
+	// There is no "cancelled" sentinel in the return value: a caller that
+	// needs to know whether a given getMove() result reflects a completed
+	// search or a stop must track that itself (e.g. note before calling
+	// getMove() whether requestStop() had been invoked).
+	volatile int stopfl = 0;          // requestStop() sets 1; Tree() bails; cleared at getMove()/reset()
+	CAiListener *listener = nullptr;   // hook target; nullptr => no calls, no allocation
+	int callbackMask = 0;              // mirrors old 'callbacks'; gates the visualization callback
+	int loadErr = 0;                   // set to 1 by the ctor if pente.tbl/pente.scs/opngbk.pen failed to open
+
 
 // Operations
 public:
 	int getMove(int *moves, int count);
+
+	// True unless the ctor failed to open one of pente.tbl / pente.scs /
+	// opngbk.pen under filesDir (in which case the corresponding table(s)
+	// are left uninitialized and the engine may misbehave). Behavior is
+	// otherwise unchanged from before this flag existed -- the ctor does not
+	// abort or throw; callers that care should check ok() themselves.
+	bool ok() const { return !loadErr; }
+
+	// --- mobile portability seam (opt-in; inert for WASM / default callers) ---
+	// Async stop: a host thread calls requestStop() while getMove() runs on the
+	// engine thread; Tree() notices at its coarse per-node boundary and bails out
+	// returning the current best legal move (old engine's AiWrapper stop(ptr) ->
+	// cai->stopped=1, checked in the search loop). Cleared at getMove() entry.
+	void requestStop() { stopfl = 1; }
+	// Install / remove the hook listener (nullptr => no callbacks, no overhead).
+	void setListener(CAiListener *l) { listener = l; }
+	// Mirrors old toggleCallbacks(): non-zero enables the per-Eval visualization
+	// callback; aiEvaluated() fires whenever a listener is set regardless of mask.
+	void setCallbackMask(int m) { callbackMask = m; }
+
 	// void setUseOpeningBook(bool book);
 	// void setLevel(int lvl);
 	// note: no setGame — cfg is derived from the game ID once, in the

@@ -3,6 +3,7 @@
 #include "Ai.h"
 #include <iostream>
 #include <fstream>
+#include <string>
 
 using namespace std;
 
@@ -69,7 +70,7 @@ int CAi::ownerOf(int idx) {
     return 1 + idx%2;
 }
 
-CAi::CAi(int game1, int lvl, bool openingBook1) {
+CAi::CAi(int game1, int lvl, bool openingBook1, const char *filesDir) {
 	if (openingBook1) {
 		this->obfl = 1;
 	} else {
@@ -77,6 +78,15 @@ CAi::CAi(int game1, int lvl, bool openingBook1) {
 	}
 	this->level = lvl;
 	this->cfg = configFor(game1);
+
+	// Resource-directory seam: build the three data-file paths from filesDir
+	// (defaults to "files"). Trailing '/' handled either way. WASM keeps "files"
+	// so the emscripten embed lookup is byte-identical to before.
+	std::string base(filesDir ? filesDir : "files");
+	if (!base.empty() && base.back() != '/') base += '/';
+	std::string tblPath = base + "pente.tbl";
+	std::string scsPath = base + "pente.scs";
+	std::string penPath = base + "opngbk.pen";
 
 //     int x, y,z;
 //     pAt = ATbl;
@@ -194,7 +204,7 @@ CAi::CAi(int game1, int lvl, bool openingBook1) {
         short *table1 = new short int [tsize*4];
 
 
-		ifstream file ("files/pente.tbl", ios::in|ios::binary|ios::ate);//[943][4] 
+		ifstream file (tblPath.c_str(), ios::in|ios::binary|ios::ate);//[943][4]
         unsigned char *fileDataArray;
         int fileCntr = 0;
 		if (file.is_open()) {
@@ -219,6 +229,7 @@ CAi::CAi(int game1, int lvl, bool openingBook1) {
 			delete[] fileDataArray;
 		} else {
 			printf("can't open pente tbl\n");
+			loadErr = 1;
 		}
         // for(int i = 3600; i<3650; i++) {
         //     printf("kitten %d\n", pAt[i]);
@@ -231,7 +242,7 @@ CAi::CAi(int game1, int lvl, bool openingBook1) {
         // }
 
 
-		ifstream file2 ("files/pente.scs", ios::in|ios::binary|ios::ate);
+		ifstream file2 (scsPath.c_str(), ios::in|ios::binary|ios::ate);
         fileCntr = 0;
 		if (file2.is_open()) {
 			int file2size = file2.tellg();
@@ -256,10 +267,11 @@ CAi::CAi(int game1, int lvl, bool openingBook1) {
 			delete[] fileDataArray;
 		} else {
 			printf("can't open pente scs\n");
+			loadErr = 1;
 		}
 
         
-		ifstream file3 ("files/opngbk.pen", ios::in|ios::binary|ios::ate);
+		ifstream file3 (penPath.c_str(), ios::in|ios::binary|ios::ate);
         fileCntr = 0;
 		if (file3.is_open()) {
 			int file3size = file3.tellg();
@@ -318,6 +330,7 @@ CAi::CAi(int game1, int lvl, bool openingBook1) {
 			delete[] fileDataArray;
 		} else {
 			printf("can't open opngbk pen\n");
+			loadErr = 1;
 		}
 }
 
@@ -379,6 +392,7 @@ void CAi::reset() {
     // cmove()'s book-matching blocks, which all key off obfl.
     if (cfg.stonesPerTurn == 2) obfl = 0;
     c6FallbackHits = 0;
+    stopfl = 0;   // mobile stop seam cleared on every per-game reset
 }
 
 
@@ -419,6 +433,15 @@ void CAi::addMove(int move, int count) {
 }
 
 int CAi::getMove(int *moves, int count) {
+	// Persistent-instance re-entrancy (mobile): the Android/iOS wrappers hold ONE
+	// CAi across many moves, whereas WASM builds a fresh CAi per call. reset()
+	// here re-derives every per-game accumulator (brd[0] board, ccc[] capture
+	// counts, sx/sy, tn/moveNum, obfl/opening-book state, c6FallbackHits, stopfl)
+	// from scratch, so a reused instance replaying a grown move list yields the
+	// SAME result as a fresh instance. For the WASM fresh-per-call path this is a
+	// second, idempotent reset() (the ctor already called it and nothing ran in
+	// between) that consumes no rand() draws, so the goldens are unchanged.
+	reset();
 	for(int i = 0; i < count; i++) {
 		addMove(moves[i], i+1);
 	}
@@ -1547,7 +1570,15 @@ int CAi::Tree() {
                 bd[exstkx[lvl][ii]][exstky[lvl][ii]]=0;
         }
         lvl--;
-        
+
+        // Mobile stop seam: honored at this coarse per-node boundary exactly
+        // where the OLD Android engine checked `stopped` (its Tree() did the same
+        // wfl=2 bail right after lvl--). wfl=2 drops out of the outer do/while;
+        // the `if (wfl==2 && lvl>0)` cleanup below unwinds the board and bmove is
+        // returned as the current best legal move. stopfl stays 0 for WASM (no
+        // requestStop caller) so this is a no-op there.
+        if (stopfl) wfl=2;
+
         /*
          if (pDoc->Esc) {
          //check for ESC key
@@ -1593,7 +1624,25 @@ int CAi::Eval(int x, int y) {
     CPoint pt;
     int s0, i, s[7], tcap2, tcap3;
     int x9, y9, bl, tfr, tcap1;
-    
+
+    // --- mobile portability hook seam (opt-in; wholly skipped when no listener,
+    // so the WASM/default search allocates nothing and behaves identically) ---
+    // Fires at the top of Eval(), matching the OLD Android engine's two JNI
+    // callbacks: aiEvaluated() UNCONDITIONALLY per Eval, and (mask-gated)
+    // aiVisualization() with a flattened 19x19 board where the cell under
+    // evaluation is marked 3 (old: temp[x*size+y]=3, i outer / j inner).
+    if (listener) {
+        listener->aiEvaluated();
+        if (callbackMask) {
+            int vis[361], vk = 0;
+            for (int vi = 0; vi < size; vi++)
+                for (int vj = 0; vj < size; vj++)
+                    vis[vk++] = bd[vi][vj];
+            vis[x*size + y] = 3;
+            listener->aiVisualization(vis, 361);
+        }
+    }
+
     lvl--;
     for (i=1; i<7; i++) s[i]=0;
     gf=0;
