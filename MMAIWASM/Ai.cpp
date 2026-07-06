@@ -34,7 +34,7 @@ VariantConfig CAi::configFor(int gameId) {
 		case 11: // Poof-Pente
 			c.poofPairs = true;
 			break;
-		case 13: // Connect6 — mechanics gated only; NOT playable yet (plan §4)
+		case 13: // Connect6: two-stone turns, 6-in-a-row win (overlines count), no captures
 			c.capturePairs = false;
 			c.winRowLength = 6;
 			c.stonesPerTurn = 2;
