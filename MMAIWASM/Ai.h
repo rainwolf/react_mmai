@@ -102,6 +102,11 @@ protected:
 	int rowWin;                           // boat: Score() saw an (unclamped) >=5 row win this call
 	int pendN[20]; CPoint pendC[20][9];   // boat: provisional-run cells recorded per ply
 
+	// Connect6 (cfg.stonesPerTurn==2): tn at Move() entry, used by Tree() to
+	// rotate the player from the global 0-based stone index via ownerOf().
+	int tnRoot;
+	int c6FallbackHits = 0;               // Connect6: times the defensive 2nd-stone fallback fired
+
 
 	int ciel[20][7], mxnd[20], sec[3];
 
@@ -118,9 +123,15 @@ public:
 
 protected:
 	static VariantConfig configFor(int gameId);
+	// Owner (1/2) of the stone at 0-based global index idx. Connect6 packs two
+	// stones per turn (idx%4 in {0,3} -> P1, else P2); every other variant
+	// strictly alternates. NOTE: not static (unlike configFor) because it reads
+	// cfg.stonesPerTurn; the spec's "member static" wording can't hold here.
+	int ownerOf(int idx);
 	int Tree();
 	int Eval(int x, int y);
 	int Score(CPoint pt);
+	int Score6(CPoint pt);   // Connect6: direct 6-window eval, bypasses 5-based tables
 	int boatRunAxis(int x, int y, int p, int a, CPoint *cells); // boat: maximal own run on one axis
 	int boatRun(int x, int y, int p, CPoint *cells);            // boat: first axis whose run is >=5
 	int boatRunProof(int x, int y, int p);                      // boat: five has no capturable stone?

@@ -56,6 +56,19 @@ VariantConfig CAi::configFor(int gameId) {
 	return c;
 }
 
+// Owner (1 or 2) of the stone placed at 0-based global move index idx.
+// Connect6 turns are two stones (except the very first, a single stone at
+// idx 0): the move sequence owner pattern is 1,2,2,1,1,2,2,1,... so
+//   idx%4 in {0,3} -> P1, idx%4 in {1,2} -> P2.
+// Every other variant strictly alternates (1,2,1,2,...).
+// Only ever called on the Connect6 path (all call sites gate on
+// stonesPerTurn==2), so the alternating branch stays dormant for the
+// pente family and the goldens are unaffected.
+int CAi::ownerOf(int idx) {
+    if (cfg.stonesPerTurn == 2) return (idx%4==0 || idx%4==3) ? 1 : 2;
+    return 1 + idx%2;
+}
+
 CAi::CAi(int game1, int lvl, bool openingBook1) {
 	if (openingBook1) {
 		this->obfl = 1;
@@ -359,6 +372,13 @@ void CAi::reset() {
     }
     TableX[361]=2031; //SET lo
     TableY[361]=3201;
+
+    // Connect6: no opening book, no tournament ring, no pente openings. reset()
+    // is the constructor tail (called after cfg is set and after obfl was forced
+    // to 1 above / in the ctor), so clearing obfl here defeats dmov()'s and
+    // cmove()'s book-matching blocks, which all key off obfl.
+    if (cfg.stonesPerTurn == 2) obfl = 0;
+    c6FallbackHits = 0;
 }
 
 
@@ -404,12 +424,81 @@ int CAi::getMove(int *moves, int count) {
 	}
     moveNum = count;
     tn = moveNum + 1;
+
+    if (cfg.stonesPerTurn == 2) {
+        // ---- Connect6 two-stone turn (packed return) ----------------------
+        // ownerOf() owner pattern by 0-based global index:
+        //   idx : 0   1   2   3   4   5   6  ...
+        //   own : P1  P2  P2  P1  P1  P2  P2 ...   (idx 0 = lone opening stone)
+        // The stone about to be placed has index `count` (== tn-1). This turn
+        // still has 2 stones to place iff the NEXT index belongs to the same
+        // player; move 0 and any mid-pair invocation leave just 1:
+        //   count=0: own(0)=1,own(1)=2 differ -> 1 (move 0, single stone)
+        //   count=1: own(1)=2,own(2)=2 same   -> 2 (P2 turn start)
+        //   count=2: own(2)=2,own(3)=1 differ -> 1 (P2 mid-pair)
+        //   count=3: own(3)=1,own(4)=1 same   -> 2 (P1 turn start)
+        //   count=4: own(4)=1,own(5)=2 differ -> 1 (P1 mid-pair)
+        //   count=5: own(5)=2,own(6)=2 same   -> 2 (P2 turn start)
+        int stonesRemaining = (ownerOf(count+1) == ownerOf(count)) ? 2 : 1;
+
+        // Stone 1: normal search path. cmove() forces move 180 at tn==1 and
+        // returns -1 for every later Connect6 turn (openings disabled), so the
+        // Tree search in Move() runs.
+        seat = ownerOf(count);
+        int m1 = cmove();
+        if (m1 == -1) m1 = Move();
+
+        // Packed as m1*362+m2 (base 362, not 361): m2 in 0..360 is a real
+        // cell, 361 is the single-stone sentinel. Base 361 was ambiguous --
+        // m1*361+361 == (m1+1)*361+0 collided with the next m1's move-0 --
+        // so the pack must use one more than the largest cell index.
+        // Max packed value 360*362+361 = 130681, well within int range.
+        if (stonesRemaining == 1)
+            return m1 * 362 + 361;   // sentinel m2 == 361 (only one stone this turn)
+
+        // Stone 2: replay m1 through the SAME addMove()/dmov() path used for the
+        // input moves, so brd[0]/sx/sy/tn stay canonical and dmov() assigns it
+        // to the same player (ownerOf(tn-1)==ownerOf(count)). Then search again;
+        // the second search's root player is ownerOf(count+1) == ownerOf(count),
+        // so ownerOf keeps the same player on the move. Two full searches per
+        // turn is the deliberate v1 design (simple + correct); no PV/pair theory.
+        addMove(m1, count+1);
+        moveNum = count + 1;
+        tn = moveNum + 1;            // count+2
+        seat = ownerOf(count+1);
+        int m2 = cmove();
+        if (m2 == -1) m2 = Move();
+
+        // Defensive guard: if the second search echoes m1 or lands on an
+        // occupied/illegal cell, substitute any legal empty cell (adjacent to a
+        // stone first, else any empty). Should never fire in normal play.
+        if (m2 == m1 || m2 < 0 || m2 > 360 || brd[0][m2%19][m2/19] > 0) {
+            c6FallbackHits++;
+            int fb = -1;
+            for (int yy=0; yy<19 && fb<0; yy++)
+                for (int xx=0; xx<19; xx++) {
+                    int mm = yy*19+xx;
+                    if (mm==m1) continue;
+                    if (brd[0][xx][yy]==-1) { fb=mm; break; }   // empty near a stone
+                }
+            if (fb < 0)
+                for (int yy=0; yy<19 && fb<0; yy++)
+                    for (int xx=0; xx<19; xx++) {
+                        int mm = yy*19+xx;
+                        if (mm==m1) continue;
+                        if (brd[0][xx][yy]==0) { fb=mm; break; }   // any empty cell
+                    }
+            if (fb >= 0) m2 = fb;
+        }
+        return m1 * 362 + m2;
+    }
+
     int move = cmove();
     if (move == -1) {
     	seat = 2 - tn%2;
         move = Move();
     }
-    
+
     return move;
 }
 
@@ -450,6 +539,7 @@ int CAi::Move() { // AI MAIN routine
     /////////////input from somewhere ....//////////////////////////
     cp=seat; //current player
     turn=tn; //current turn
+    tnRoot=(int)tn; //Connect6: base for Tree()'s ownerOf rotation (tn at Move() entry)
     for (x=0; x<19; x++)
         for (y=0; y<19; y++)
             bd[x][y]=brd[0][x][y]; //BOARD
@@ -476,7 +566,7 @@ int CAi::Move() { // AI MAIN routine
 //    gf=pDoc->gf;  //set to 0
                   ///////////////////////////////////////////////////////////////
     
-    vct=1; //threat search
+    vct = (cfg.stonesPerTurn==2) ? 0 : 1; //threat search (Connect6 v1: no VCT/fukumi/threat extensions)
     tourn=cfg.tournamentOpening ? 1 : 0; //tournament rule
     breadth=1;
     extent=0;
@@ -526,14 +616,14 @@ int CAi::Move() { // AI MAIN routine
         return 0;
     }
     if (turn==1) bmove=180;
-    if (turn==2) {
+    if (turn==2 && cfg.stonesPerTurn!=2) {   // Connect6: no tn==2 pente opening -> search
         do {
             x=7+rand()%5;
             y=7+rand()%5;
         } while (bd[x][y]>0);
         bmove=y*19+x;
     }
-    if (turn==3) {
+    if (turn==3 && cfg.stonesPerTurn!=2) {   // Connect6: no tn==3 pente opening -> search
         do {
             i=rand()%32;
             x=om3[i]%19;
@@ -566,8 +656,12 @@ void CAi::dmov() {
     int i, j, k, x, y, cx, cy, obi, mfl, kfl;
     int c1,c2,c3,c4,c5,c6,c7,c8,d;
     
-    cp=2-tn%2;  //set current player
-    brd[0][sx[tn]][sy[tn]]=2-tn%2;  //place piece (1 or 2) on board
+    // Current player owning the replayed stone. addMove() places stone #tn
+    // (1-based turn), whose 0-based global index is tn-1, so the owner is
+    // ownerOf(tn-1). Connect6 needs this (its turns are two stones); the pente
+    // family keeps the exact old 2-tn%2 alternation (goldens gate).
+    cp = (cfg.stonesPerTurn==2) ? ownerOf((int)tn-1) : 2-tn%2;  //set current player
+    brd[0][sx[tn]][sy[tn]]=cp;  //place piece (1 or 2) on board
     for (x=sx[tn]-extnt; x<sx[tn]+1+extnt; x++) //set spaces around piece to -1
         for (y=sy[tn]-extnt; y<sy[tn]+1+extnt; y++) //for consideration by ai
             if (x>=0 && x<size && y>=0 && y<size)
@@ -785,10 +879,11 @@ int CAi::cmove() {
     //System.out.println("start cmov() obfl="+obfl+",tn="+tn+",s="+size);
     
     int i, x, y, xx,t;
-    
+
     //opening moves for turn 2 and 3.
-    
-    cp=2-tn%2;
+
+    // Connect6: player from the global index (tn-1); pente family: old alternation.
+    cp = (cfg.stonesPerTurn==2) ? ownerOf((int)tn-1) : 2-tn%2;
 //    cp=seat;
     bmove=0;
     bscr=0;
@@ -821,7 +916,7 @@ int CAi::cmove() {
         //        }
         i=0;
     }
-    else if (tn==2) {
+    else if (tn==2 && cfg.stonesPerTurn!=2) {   // Connect6: no tn==2 pente opening
         //System.out.println("2");
         do {
             x=7+(arc4random_uniform(3));
@@ -831,7 +926,7 @@ int CAi::cmove() {
         } while (brd[0][x][y]>0);
         bmove=y*size+x;
     }
-    if (tn==3 && obfl==0) {
+    if (tn==3 && obfl==0 && cfg.stonesPerTurn!=2) {   // Connect6: no tn==3 pente opening
         //System.out.println("3");
         //if (tn==3 && !obfl) {
         do {
@@ -969,8 +1064,18 @@ int CAi::Tree() {
 
             for (x=1; x<=np; x++)
                 cc[lvl][x]=cc[lvl-1][x];
-            fr=cp-1+lvl;
-            while (fr>np) fr-=np;
+            if (cfg.stonesPerTurn==2) {
+                // Connect6: rotate the player from the global stone index, not
+                // by strict alternation. The first search ply (lvl==1) places
+                // global index tnRoot-1, so fr = ownerOf(tnRoot-2+lvl).
+                // Consecutive plies may share a player (a turn's two stones) --
+                // exactly what the minimax needs. fr(lvl==1)==cp (==ownerOf of
+                // the mover), keeping cp-indexed ciel/scr consistent.
+                fr = ownerOf(tnRoot-2+lvl);
+            } else {
+                fr=cp-1+lvl;
+                while (fr>np) fr-=np;
+            }
             en=fr+1;
             if (en>np) en=1;
             if (fl1) {
@@ -1330,8 +1435,15 @@ int CAi::Tree() {
         fl1=0;
         if (*pmv>=*pmxmv) { //no more moves
             lvl--;
-            fr--;
-            if (!fr) fr=np;
+            // Backtrack must mirror the push path's fr assignment (see the
+            // cfg.stonesPerTurn==2 branch above) for the level we are
+            // returning to. A bare fr-- assumes strict alternation, but
+            // Connect6's 1,2,2,1 rotation means popping back from the second
+            // stone of a turn must NOT flip the player -- only recomputing
+            // fr from tnRoot/lvl (exactly as the push path does) gets this
+            // right for every rotation position.
+            if (cfg.stonesPerTurn==2) fr=ownerOf(tnRoot-2+lvl);
+            else { fr--; if (!fr) fr=np; }
         }
         else if (lvl==mxlv) {
             hmv[lvl]=mvlst[1][mv[1]];
@@ -1393,7 +1505,14 @@ int CAi::Tree() {
             }
             frmo=fr-1;
             if (frmo<1) frmo+=np;
-            if (lvl > 1)
+            // Connect6 v1: DISABLE the lvl-2 sibling/parity cutoff. It assumes
+            // ply lvl-2 is the same player as ply lvl (strict period-2
+            // alternation), which is false for Connect6's period-4 rotation
+            // (1,2,2,1,...) -- pruning on scr[lvl-2] would be unsound and could
+            // drop a forced win/loss. Correctness first; a same-player-ancestor
+            // rework is a later optimization (spec non-goal). The move is still
+            // undone by the general backup block below, so search stays correct.
+            if (lvl > 1 && cfg.stonesPerTurn!=2)
                 if (scr[lvl][frmo] <= scr[lvl-2][frmo]) {
                     if (lvl<mxlv) {
                         rxy=mvlst[lvl][mv[lvl]];
@@ -1591,6 +1710,12 @@ int CAi::Score(CPoint pt) {
     c4=c5=0;
     dv=0;
     for (i=1; i<7; i++) sco[i]=c3[i]=0;
+
+    // Connect6: direct 6-window eval, bypassing the 5-based pattern tables. The
+    // counters above are already zeroed and Score6 leaves them 0, so Eval()'s
+    // capture/threatened/protected/poof loops all skip (list-empty-safe).
+    if (cfg.winRowLength == 6) return Score6(pt);
+
     hlim=4;
     if (cfg.captureTriples) hlim=5;
 
@@ -1910,7 +2035,13 @@ int CAi::Score(CPoint pt) {
                     } //np=2, !gf
                 } //friend
                 else {
-                    sco[f0]-=*(pAs+index*14+3);
+                    // f0 can be -1 here (never assigned away from its -1 init
+                    // when qs never triggers the f0==-1 branch above), which
+                    // would alias the erfl member via sco[-1] -- pre-existing
+                    // UB that just happens to hit a dead write (erfl is never
+                    // read again after CAi::reset()/ctor init). Guard it so
+                    // the write only ever lands inside sco[1..np].
+                    if (f0>0) sco[f0]-=*(pAs+index*14+3);
                 }
                 if (f0==f1[0]) f0=f1[1]; //eval other player
                 else f0=f1[0];
@@ -1964,6 +2095,60 @@ int CAi::Score(CPoint pt) {
     s0=sco[fr];
 
     return s0;
+}
+
+// ---- Connect6 direct 6-window evaluator ---------------------------------
+// Called from Score() for cfg.winRowLength==6, replacing the 5-based pattern
+// tables entirely. Score() has already zeroed cap1/cap2/cap3/capP/capPf/rowWin,
+// and Score6 leaves them 0, so Eval()'s capture/threatened/protected/poof
+// rescore loops all skip; Eval consumes only sco[] and this function's return.
+//
+// Contract mirrors Score(): sco[fr] holds the mover's value (>=0), sco[3-fr]
+// holds the opponent's threat stored NEGATIVE, so Eval()'s sco[fr]-sco[3-fr]*4
+// turns "opponent could complete here" into a large positive blocking value
+// (no separate blocking mechanism -- the *4 defense line does it). Returns
+// sco[fr]; a 12000 return trips Eval()'s s0>10000 win path.
+//
+// For each perspective P in {fr, 3-fr}, treat (x,y) as a hypothetical P stone
+// and slide every length-6 window containing (x,y) along all 4 axes:
+//   - window must be fully on-board with no enemy (non-P) stone, else skip;
+//   - n = P stones in the window (1..6, including the hypothetical center);
+//   - n==6 => a completed six => terminal, magnitude 12000. This also covers
+//     overlines: any 7+ run contains a full 6-window, so n==6 fires there too;
+//   - else add w6[n], w6={_,1,6,32,200,1600} for n=1..5.
+// Magnitude is capped at 12000. Empty cells read 0 or -1; off-board is -2.
+int CAi::Score6(CPoint pt) {
+    int x=pt.x, y=pt.y;
+    static const int w6[7] = {0, 1, 6, 32, 200, 1600, 0}; // index by n; n==6 terminal
+    for (int sd=0; sd<2; sd++) {
+        int P = (sd==0) ? fr : 3-fr;
+        int acc = 0, terminal = 0;
+        for (int a=0; a<4 && !terminal; a++) {
+            int line[11];                          // offsets -5..+5 along axis a
+            for (int k=0; k<11; k++) {
+                if (k==5) { line[k]=P; continue; } // center = hypothetical P stone
+                int cx=x+(k-5)*dx[a], cy=y+(k-5)*dy[a];
+                if (cx<0||cx>=19||cy<0||cy>=19) line[k]=-2;   // off-board
+                else line[k]=bd[cx][cy];           // 1/2 = stone, 0 or -1 = empty
+            }
+            for (int i0=0; i0<=5 && !terminal; i0++) {   // 6 windows containing the center
+                int off=0, blk=0, n=0;
+                for (int j=i0; j<i0+6; j++) {
+                    int v=line[j];
+                    if (v==-2) { off=1; break; }            // window runs off-board
+                    if (v>0 && v!=P) { blk=1; break; }      // enemy stone -> dead window
+                    if (v==P) n++;                          // center + any P stones
+                }
+                if (off || blk) continue;
+                if (n>=6) { terminal=1; break; }
+                acc += w6[n];
+            }
+        }
+        int mag = terminal ? 12000 : (acc>12000 ? 12000 : acc);
+        if (sd==0) { sco[fr]=mag; if (terminal) rowWin=1; }  // mover: positive
+        else       sco[3-fr] = -mag;                         // opponent: negative
+    }
+    return sco[fr];
 }
 
 // ---- Boat-Pente provisional-five helpers --------------------------------
