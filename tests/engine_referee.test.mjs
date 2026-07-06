@@ -56,6 +56,21 @@ function countStones(g) {
     return n;
 }
 function snapshot(g) { const s = []; for (let x = 0; x < 19; x++) s.push(g.abstractBoard[x].slice()); return s; }
+// True if `color` has a run of 6+ contiguous stones anywhere (scans the board directly,
+// independent of GameClass's own detector).
+function hasSixContiguous(g, color) {
+    const B = g.abstractBoard;
+    const dirs = [[1, 0], [0, 1], [1, 1], [1, -1]];
+    for (let x = 0; x < 19; x++) for (let y = 0; y < 19; y++) {
+        if (B[x][y] !== color) continue;
+        for (const [dx, dy] of dirs) {
+            let n = 1, cx = x + dx, cy = y + dy;
+            while (cx >= 0 && cx < 19 && cy >= 0 && cy < 19 && B[cx][cy] === color) { n++; cx += dx; cy += dy; }
+            if (n >= 6) return true;
+        }
+    }
+    return false;
+}
 
 for (const gameId of [11, 15, 25]) {
     const g = freshGame(gameId);
@@ -103,6 +118,52 @@ for (const gameId of [11, 15, 25]) {
     check(`engine<->referee game ${gameId} did not end implausibly early (>= 8 plies)`,
         plies >= 8,
         `plies=${plies} caps=${JSON.stringify(g.captures)}`);
+}
+
+// ---------------------------------------------------------------------------
+// Connect6 (game 13): the engine returns the AI's two stones PACKED in base 362
+// (packed = m1*362 + m2; m2 === 361 is the single-stone sentinel, only on an empty
+// board). Drive the engine as BOTH players for ~8 two-stone turns, decode each packed
+// return, and apply m1/m2 individually through GameClass.addMove. Assert: every stone
+// lands on an empty cell, GameClass currentPlayer agrees with the engine owner for the
+// whole turn, stone-count === moves length, captures stay 0, and any real game-over has
+// a genuine 6+ run for the winner.
+{
+    const gameId = 13;
+    const g = freshGame(gameId);
+    g.addMove(180); // opening center (matches START_GAME saga): P1's single first stone
+    let ok = true, detail = '', turns = 0;
+    for (let turn = 0; turn < 8 && !g.isGameOver(); turn++) {
+        const mover = g.currentPlayer(); // owner of this whole two-stone turn
+        const packed = engineMove(gameId, g.moves, 1, 0);
+        if (!Number.isInteger(packed) || packed < 0) { ok = false; detail = `bad packed ${packed} turn ${turn}`; break; }
+        const m1 = Math.floor(packed / 362), m2 = packed % 362;
+        const stones = (m2 === 361) ? [m1] : [m1, m2];
+        let bad = false;
+        for (const mv of stones) {
+            if (!Number.isInteger(mv) || mv < 0 || mv > 360) { ok = false; detail = `illegal stone ${mv} (packed ${packed}) turn ${turn}`; bad = true; break; }
+            const x = mv % 19, y = Math.floor(mv / 19);
+            if (g.abstractBoard[x][y] !== 0) { ok = false; detail = `stone ${mv} onto occupied (${g.abstractBoard[x][y]}) turn ${turn}`; bad = true; break; }
+            if (g.currentPlayer() !== mover) { ok = false; detail = `currentPlayer ${g.currentPlayer()} != engine owner ${mover} mid-turn ${turn}`; bad = true; break; }
+            g.addMove(mv);
+        }
+        if (bad) break;
+        turns++;
+        if (countStones(g) !== g.moves.length) { ok = false; detail = `stone-count ${countStones(g)} != moves ${g.moves.length} turn ${turn}`; break; }
+        if (g.captures[1] !== 0 || g.captures[2] !== 0) { ok = false; detail = `captures nonzero ${JSON.stringify(g.captures)} turn ${turn}`; break; }
+    }
+    check(`engine<->referee connect6 (13) two-stone replay (${turns} turns)`, ok, detail);
+    check('engine<->referee connect6 stone-count == moves length',
+        countStones(g) === g.moves.length, `stones=${countStones(g)} moves=${g.moves.length}`);
+    check('engine<->referee connect6 captures stay 0',
+        g.captures[1] === 0 && g.captures[2] === 0, `caps=${JSON.stringify(g.captures)}`);
+    if (g.isGameOver()) {
+        check('engine<->referee connect6 game-over winner really has 6+ contiguous',
+            hasSixContiguous(g, g.winner), `winner=${g.winner}`);
+    } else {
+        check('engine<->referee connect6 ran the full 8 turns without a bogus game-over',
+            turns === 8, `turns=${turns}`);
+    }
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

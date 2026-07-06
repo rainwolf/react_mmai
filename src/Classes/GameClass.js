@@ -517,11 +517,33 @@ export class Game {
         const new_moves = this.moves.slice(0, this.moves.length - 1);
         if (this.until === this.moves.length) {
             this.until -= 1;
-        } 
+        }
         this.moves = new_moves;
         this.replayGame();
     };
-    
+
+    // Undo back to a state where it's the human's turn again. A plain undoMove() pops a
+    // single stone, which is correct for one-stone-per-turn variants (pops twice: once for
+    // the AI's reply, once for the human's own move) but is wrong for Connect6 (game 13/14),
+    // where a turn is two stones: popping only two moves can still land mid the AI's turn
+    // and deadlock the board (only ADD_MOVE re-invokes the AI saga; input is gated on
+    // isMyTurn()). Instead, keep popping while it still isn't the human's turn.
+    // currentPlayer()/isMyTurn() are pure functions of moves.length (and the fixed color
+    // fields), so this always terminates: worst case it pops all the way to an empty board
+    // (moves.length === 0), which is always the human's turn when the human is P1. When the
+    // human is P2, the AI's forced single opening stone (index 0) always belongs to P1, so
+    // moves.length === 1 is always a human-turn state too -- undo naturally stops there
+    // unless it was invoked with moves.length === 1 already, in which case the mandatory
+    // first pop empties the board and the safe fallback (moves.length === 0) applies. For
+    // one-stone variants this reproduces the old "pop once, pop again if still not my turn"
+    // behavior exactly.
+    undoMyTurn = () => {
+        this.undoMove();
+        while (!this.isMyTurn() && this.moves.length > 0) {
+            this.undoMove();
+        }
+    };
+
     replayGame = (until) => {
         if (until === undefined) {
             until = this.moves.length;
@@ -690,6 +712,11 @@ export class Game {
         } else if (this.game < 15) {
             let player = (((this.moves.length % 4) === 1) || ((this.moves.length % 4) === 0)) ? 1 : 2;
             this.#addGomokuMove(x, y, player);
+            // Connect6: SIX OR MORE contiguous stones win (overlines win, matching the
+            // server's SimpleGomokuState.allowOverlines(true)). No captures in this path.
+            if (this.#detectConnect6Of(player, move)) {
+                this.winner = player;
+            }
         } else if (this.game < 17) {
             let player = 2 - (this.moves.length%2);
             this.#addPenteMove(x, y, player);
@@ -1824,8 +1851,125 @@ export class Game {
             i += 1;
             j -= 1;
         }
-        
+
         return pente;
+    }
+
+    // Connect6 win: SIX OR MORE contiguous stones of `color` through the just-placed
+    // move (overlines win, matching the server's SimpleGomokuState.allowOverlines(true)).
+    // Structure mirrors #detectPenteOf exactly (four axes, scan both directions, >= 0
+    // guards so runs touching row/col 0 are counted); only the winning length differs
+    // (> 5 instead of > 4). Touches no captures.
+    #detectConnect6Of = (color, rowCol) => {
+        let six = false;
+        let counter = 1;
+        let col = Math.floor(rowCol / 19), row = rowCol % 19, i, j;
+        i = row - 1;
+        j = col;
+        while (i >= 0 && i < 19 && j >= 0 && j < 19 && !six) {
+            if (color === this.abstractBoard[i][j]) {
+                counter += 1;
+                six = (counter > 5);
+            } else {
+                break;
+            }
+            i -= 1;
+        }
+        i = row + 1;
+        j = col;
+        while (i >= 0 && i < 19 && j >= 0 && j < 19 && !six) {
+            if (color === this.abstractBoard[i][j]) {
+                counter += 1;
+                six = (counter > 5);
+            } else {
+                break;
+            }
+            i += 1;
+        }
+        if (six) {
+            return six;
+        }
+        counter = 1;
+        i = row;
+        j = col - 1;
+        while (i >= 0 && i < 19 && j >= 0 && j < 19 && !six) {
+            if (color === this.abstractBoard[i][j]) {
+                counter += 1;
+                six = (counter > 5);
+            } else {
+                break;
+            }
+            j -= 1;
+        }
+        i = row;
+        j = col + 1;
+        while (i >= 0 && i < 19 && j >= 0 && j < 19 && !six) {
+            if (color === this.abstractBoard[i][j]) {
+                counter += 1;
+                six = (counter > 5);
+            } else {
+                break;
+            }
+            j += 1;
+        }
+        if (six) {
+            return six;
+        }
+        counter = 1;
+        i = row - 1;
+        j = col - 1;
+        while (i >= 0 && i < 19 && j >= 0 && j < 19 && !six) {
+            if (color === this.abstractBoard[i][j]) {
+                counter += 1;
+                six = (counter > 5);
+            } else {
+                break;
+            }
+            j -= 1;
+            i -= 1;
+        }
+        i = row + 1;
+        j = col + 1;
+        while (i >= 0 && i < 19 && j >= 0 && j < 19 && !six) {
+            if (color === this.abstractBoard[i][j]) {
+                counter += 1;
+                six = (counter > 5);
+            } else {
+                break;
+            }
+            i += 1;
+            j += 1;
+        }
+        if (six) {
+            return six;
+        }
+        counter = 1;
+        i = row - 1;
+        j = col + 1;
+        while (i >= 0 && i < 19 && j >= 0 && j < 19 && !six) {
+            if (color === this.abstractBoard[i][j]) {
+                counter += 1;
+                six = (counter > 5);
+            } else {
+                break;
+            }
+            j += 1;
+            i -= 1;
+        }
+        i = row + 1;
+        j = col - 1;
+        while (i >= 0 && i < 19 && j >= 0 && j < 19 && !six) {
+            if (color === this.abstractBoard[i][j]) {
+                counter += 1;
+                six = (counter > 5);
+            } else {
+                break;
+            }
+            i += 1;
+            j -= 1;
+        }
+
+        return six;
     }
 
 

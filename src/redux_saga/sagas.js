@@ -39,7 +39,24 @@ function* addMove(action) {
         let o = yield select((state) => state.opening_book);
         let move = Module.ccall('getAIMove', 'number',['number','number','number','number','number'], [game.game, level, o, heapBytes.byteOffset, typedArray.length]);
         yield Module._free(heapBytes.byteOffset);
-        yield put({type: ADD_MOVE, payload: move});
+        // Connect6 (game 13/14): the engine returns the AI's two stones packed in base
+        // 362 -> packed = m1*362 + m2; m2 === 361 is the single-stone sentinel (only the
+        // game's very first move). Decode and dispatch each stone as its own ADD_MOVE so
+        // GameClass.addMove applies and win-checks them individually. Re-entrancy is safe:
+        // both stones are dispatched (and STORE_MOVE-applied) before either nested addMove
+        // saga clears its delay(100) and re-checks the turn -- by then GameClass
+        // currentPlayer has flipped back to the human, so getAIMove is not re-entered.
+        // Every other game returns a plain single move int -> the branch below is unchanged.
+        if (game.isConnect6()) {
+            const m1 = Math.floor(move / 362);
+            const m2 = move % 362;
+            yield put({type: ADD_MOVE, payload: m1});
+            if (m2 !== 361) {
+                yield put({type: ADD_MOVE, payload: m2});
+            }
+        } else {
+            yield put({type: ADD_MOVE, payload: move});
+        }
         yield call(playSound, move_sound);
         yield put({type: STOP_THINKING});
     }

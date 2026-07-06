@@ -155,7 +155,7 @@ const UnconnectedGameInfoPanel = (props) => {
                                             />
                                         }
                                     >
-                                        {[1, 3, 11, 15, 25].map(g =>
+                                        {[1, 3, 11, 13, 15, 25].map(g =>
                                             <MenuItem key={g} value={g}>{game.game_name(g)}</MenuItem>
                                         )}
                                     </Select>

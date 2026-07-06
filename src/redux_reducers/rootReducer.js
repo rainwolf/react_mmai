@@ -58,10 +58,7 @@ function mmaiApp (state = initialState, action) {
         case UNDO_MOVE:
             if (newState.started) {
                 newGame = newState.game.newInstance();
-                newGame.undoMove();
-                if (!newGame.isMyTurn()) {
-                    newGame.undoMove();
-                }
+                newGame.undoMyTurn();
                 newState.game = newGame;
             }
             break;
