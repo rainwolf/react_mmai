@@ -133,6 +133,11 @@ protected:
 	// length-6 window with 5 mover stones + 1 empty is an immediate (this-turn) win.
 	int c6NextSame = 0;
 	int c6FallbackHits = 0;               // Connect6: times the defensive 2nd-stone fallback fired
+	// Connect6 v2: master switch for the static covering-threat terminal
+	// (c6UnstoppableThreat). Default true (enabled). Tests build a second engine
+	// with this false to prove every new win/defense is load-bearing on the
+	// terminal (the flag mutation gate); also a one-switch production kill.
+	bool c6ForceEnabled = true;
 
 
 	int ciel[20][7], mxnd[20], sec[3];
@@ -193,6 +198,7 @@ protected:
 	int Eval(int x, int y);
 	int Score(CPoint pt);
 	int Score6(CPoint pt);   // Connect6: direct 6-window eval, bypasses 5-based tables
+	bool c6UnstoppableThreat(int P); // Connect6 v2: static covering-threat forced-win terminal
 	int boatRunAxis(int x, int y, int p, int a, CPoint *cells); // boat: maximal own run on one axis
 	int boatRun(int x, int y, int p, CPoint *cells);            // boat: first axis whose run is >=5
 	int boatRunProof(int x, int y, int p);                      // boat: five has no capturable stone?

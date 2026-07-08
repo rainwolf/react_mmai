@@ -461,8 +461,331 @@ static void case15_defense_open4() {
     }
 }
 
-int main() {
+// =========================================================================
+// Connect6 v2: static covering-threat forced-win terminal (c6UnstoppableThreat).
+// T0 is the load-bearing detector<->oracle fuzz; T1-T6 exercise the integration
+// and both mutation gates (flag c6ForceEnabled + source mutation -DC6_NO_FORCE).
+// Direct-detector calls rely on dx/dy (default-initialized in Ai.h to the 4 axes
+// below); setAxes() re-sets them so a call never depends on a prior Move().
+// =========================================================================
+static const int AX[4][2] = { {-1,-1}, {0,-1}, {1,-1}, {-1,0} }; // dx,dy of axes 0..3 (== Move())
+
+static void setAxes(CAi &ai) { for (int a = 0; a < 4; a++) { ai.dx[a] = AX[a][0]; ai.dy[a] = AX[a][1]; } }
+
+// Copy a plain board (0=empty,1,2) into ai.bd and call the detector directly.
+static bool detOn(CAi &ai, const int b[19][19], int P) {
+    for (int x = 0; x < 19; x++) for (int y = 0; y < 19; y++) ai.bd[x][y] = b[x][y];
+    setAxes(ai);
+    return ai.c6UnstoppableThreat(P);
+}
+
+// ---- independent brute-force oracle: ground truth for the fives-only win ----
+// It shares only the DEFINITION (five = 5P+1empty+0O window; race = 0P+>=4O
+// window) with the detector, not the algorithm: it lists completion cells with
+// its OWN dedup, then simulates the opponent occupying up to 2 of them and
+// re-scans the board for a surviving five. Forced iff no 2-cell opponent
+// placement kills every five. (Correct because a five dies only if the opponent
+// occupies its single empty completion cell -- no captures in Connect6 -- so the
+// opponent's best defense is always to sit on completion cells; anything else
+// kills no five. Hence "a defense exists" <=> distinct completion cells <= 2.)
+static bool ora_win6(const int b[19][19], int a, int sx, int sy, int P, int O,
+                     int &pc, int &oc, int &emptyIdx) {
+    int dx = AX[a][0], dy = AX[a][1];
+    int ex5 = sx + 5*dx, ey5 = sy + 5*dy;
+    if (ex5 < 0 || ex5 >= 19 || ey5 < 0 || ey5 >= 19) return false;
+    pc = 0; oc = 0; emptyIdx = -1;
+    for (int k = 0; k < 6; k++) { int cx = sx + k*dx, cy = sy + k*dy; int v = b[cx][cy];
+        if (v == P) pc++; else if (v == O) oc++; else emptyIdx = cy*19 + cx; }
+    return true;
+}
+static bool ora_oppSix(const int b[19][19], int P, int O) {
+    for (int a = 0; a < 4; a++) for (int sx = 0; sx < 19; sx++) for (int sy = 0; sy < 19; sy++) {
+        int pc, oc, e; if (!ora_win6(b, a, sx, sy, P, O, pc, oc, e)) continue;
+        if (pc == 0 && oc >= 4) return true; }
+    return false;
+}
+static bool ora_hasFive(const int b[19][19], int P, int O) {
+    for (int a = 0; a < 4; a++) for (int sx = 0; sx < 19; sx++) for (int sy = 0; sy < 19; sy++) {
+        int pc, oc, e; if (!ora_win6(b, a, sx, sy, P, O, pc, oc, e)) continue;
+        if (oc == 0 && pc == 5) return true; }
+    return false;
+}
+static bool oracleForcedWin(const int bd[19][19], int P) {
+    int O = 3 - P;
+    if (ora_oppSix(bd, P, O)) return false;              // race, mirrors oppImm
+    int cand[400], nc = 0;
+    for (int a = 0; a < 4; a++) for (int sx = 0; sx < 19; sx++) for (int sy = 0; sy < 19; sy++) {
+        int pc, oc, e; if (!ora_win6(bd, a, sx, sy, P, O, pc, oc, e)) continue;
+        if (oc == 0 && pc == 5) { bool dup = false; for (int i = 0; i < nc; i++) if (cand[i] == e) { dup = true; break; }
+            if (!dup && nc < 400) cand[nc++] = e; }
+    }
+    if (nc == 0) return false;
+    for (int i = 0; i < nc; i++) for (int j = i; j < nc; j++) {
+        int b[19][19];
+        for (int x = 0; x < 19; x++) for (int y = 0; y < 19; y++) b[x][y] = bd[x][y];
+        b[cand[i]%19][cand[i]/19] = O;
+        b[cand[j]%19][cand[j]/19] = O;
+        if (!ora_hasFive(b, P, O)) return false;         // opponent has a covering defense
+    }
+    return true;
+}
+
+// ---- fuzz board generator (varied styles: sparse / dense cluster / lines) ----
+static unsigned long long rngS = 0x9E3779B97F4A7C15ULL;
+static unsigned long long xr(void) { rngS ^= rngS << 13; rngS ^= rngS >> 7; rngS ^= rngS << 17; return rngS; }
+static int ri(int n) { return (int)(xr() % (unsigned long long)n); }
+static void genBoard(int b[19][19], int style) {
+    for (int x = 0; x < 19; x++) for (int y = 0; y < 19; y++) b[x][y] = 0;
+    if (style == 0) {                       // sparse full-board
+        int n = 4 + ri(45); for (int i = 0; i < n; i++) { int x = ri(19), y = ri(19); b[x][y] = 1 + ri(2); }
+    } else if (style == 1) {                // dense cluster (many near-fives + shared cells)
+        int ox = ri(12), oy = ri(12), w = 6 + ri(8), h = 6 + ri(8);
+        for (int x = ox; x < ox+w && x < 19; x++) for (int y = oy; y < oy+h && y < 19; y++) {
+            int r = ri(100); if (r < 52) b[x][y] = 1; else if (r < 68) b[x][y] = 2; }
+    } else {                                // line-heavy (runs stress fives, dedup, oppImm)
+        int lines = 2 + ri(6);
+        for (int L = 0; L < lines; L++) { int a = ri(4), dx = AX[a][0], dy = AX[a][1];
+            int sx = ri(19), sy = ri(19), len = 3 + ri(5), who = 1 + ri(2);
+            for (int k = 0; k < len; k++) { int cx = sx + k*dx, cy = sy + k*dy;
+                if (cx < 0 || cx >= 19 || cy < 0 || cy >= 19) break; if (ri(100) < 85) b[cx][cy] = who; } }
+        int ex = ri(10); for (int i = 0; i < ex; i++) { int x = ri(19), y = ri(19); b[x][y] = 1 + ri(2); }
+    }
+}
+
+// --- T0: THE load-bearing test. Detector must agree with the oracle on every
+// random legal board, under -fsanitize=address,undefined.
+static void T0_fuzz(int N) {
+    printf("T0: detector<->oracle fuzz (%d boards x2 perspectives)\n", N);
+    CAi ai(13, 4, true); setAxes(ai);
+    long mism = 0, firedDet = 0, firedOra = 0; int shown = 0;
+    for (int t = 0; t < N; t++) { int b[19][19]; genBoard(b, t % 3);
+        for (int P = 1; P <= 2; P++) {
+            bool det = detOn(ai, b, P);
+            bool ora = oracleForcedWin(b, P);
+            if (det) firedDet++; if (ora) firedOra++;
+            if (det != ora) { mism++; if (shown < 6) { printf("  MISMATCH t=%d P=%d det=%d ora=%d\n", t, P, (int)det, (int)ora); shown++; } } } }
+    printf("    detector fired=%ld oracle fired=%ld mismatches=%ld\n", firedDet, firedOra, mism);
+    CHECK(mism == 0, "T0: c6UnstoppableThreat == oracleForcedWin on all fuzz boards");
+    CHECK(firedDet > 0, "T0: detector fired on the positive path at least once");
+}
+
+// ---- getMove integration helpers ---------------------------------------
+// Scattered far-edge filler cells (spaced so no 6-in-a-row can form).
+static int filler(int i) {
+    static const int fx[24] = {0,18,0,18, 4,14,0,0, 18,18,4,14, 2,16,0,0, 18,18,2,16, 6,12,0,0};
+    static const int fy[24] = {0,0,18,18, 0,0,4,14, 4,14,18,18, 0,0,2,16, 2,16,18,18, 0,0,6,12};
+    int k = i % 24; return fy[k]*19 + fx[k];
+}
+// brd[0] + m1 + m2 (as player) -> detector (does the returned pair form a
+// covering forced win?).
+static bool pairForcedThreat(CAi &ai, int m1, int m2, int player) {
+    int b[19][19];
+    for (int x = 0; x < 19; x++) for (int y = 0; y < 19; y++) { int v = ai.brd[0][x][y]; b[x][y] = (v > 0) ? v : 0; }
+    if (m1 >= 0 && m1 <= 360) b[m1%19][m1/19] = player;
+    if (m2 >= 0 && m2 <= 360) b[m2%19][m2/19] = player;
+    return detOn(ai, b, player);
+}
+// Run one packed getMove with the terminal on/off; report m1,m2 and root score.
+static void runGM(int L, int *mv, int n, bool forceOn, int &m1, int &m2, int &bscr) {
+    CAi ai(13, L, true);
+    ai.c6ForceEnabled = forceOn;
+    int packed = ai.getMove(mv, n);
+    g_fallback += ai.c6FallbackHits;
+    m1 = DM1(packed); m2 = DM2(packed); bscr = ai.bscr;
+}
+
+// Intersection triple: cell C=(9,9) is simultaneously the 5th stone of THREE
+// half-open fours (row 9, col 9, main diagonal), each blocked on its far side by
+// a P2 stone so each promotes to exactly ONE five. Placing C alone makes three
+// fives with three distinct completions -> forced six next turn. Crucially the
+// pre-C board has NO 5-in-6 window, so NO single stone makes an immediate six and
+// (in a mid-pair, c6NextSame==0 search) Score6's win-in-pair terminal is INACTIVE
+// -- the covering terminal is the ONLY thing that can score this a win. This is
+// the load-bearing construction: with the terminal off, the second-stone search
+// cannot see the win.
+static void intersectTriple(int *p1, int &n1, int *p2, int &n2, int &C) {
+    int a[12] = { M(5,9),M(6,9),M(7,9),M(8,9),      // row-9 four,  block (4,9), completion (10,9)
+                  M(9,5),M(9,6),M(9,7),M(9,8),      // col-9 four,  block (9,4), completion (9,10)
+                  M(5,5),M(6,6),M(7,7),M(8,8) };    // main-diag four, block (4,4), completion (10,10)
+    for (int i = 0; i < 12; i++) p1[i] = a[i]; n1 = 12;
+    int b[3] = { M(4,9), M(9,4), M(4,4) };
+    for (int i = 0; i < 3; i++) p2[i] = b[i]; n2 = 3;
+    C = M(9,9);
+}
+// Build a Connect6 history whose end is a P1 MID-PAIR index (ownerOf(count)==1,
+// ownerOf(count+1)==2, i.e. count%4==0, count>0): getMove then searches for P1's
+// SECOND stone with the first already on the board (c6NextSame==0 at the root).
+static int buildHistoryMidPair(CAi &ai, int *mv, const int *p1, int n1, const int *p2, int n2) {
+    int i1 = 0, i2 = 0, fi = 0, idx = 0;
+    while (i1 < n1 || i2 < n2 || idx == 0 || (idx % 4) != 0) {
+        int owner = ai.ownerOf(idx);
+        int cell = (owner == 1) ? ((i1 < n1) ? p1[i1++] : filler(fi++))
+                                : ((i2 < n2) ? p2[i2++] : filler(fi++));
+        mv[idx++] = cell;
+        if (idx >= 58) break;
+    }
+    return idx;
+}
+
+// A second intersection triple (T2): the completing cell (9,9) is the 5th stone
+// of a horizontal four, a MAIN-diagonal four, and an ANTI-diagonal four (a
+// three-armed cross using a different axis mix than T1's row/col/diag).
+static void intersectTriple2(int *p1, int &n1, int *p2, int &n2, int &C) {
+    int a[12] = { M(5,9),M(6,9),M(7,9),M(8,9),        // row-9 four,   block (4,9),  completion (10,9)
+                  M(5,5),M(6,6),M(7,7),M(8,8),        // main-diag four, block (4,4), completion (10,10)
+                  M(13,5),M(12,6),M(11,7),M(10,8) };  // anti-diag four, block (14,4), completion (8,10)
+    for (int i = 0; i < 12; i++) p1[i] = a[i]; n1 = 12;
+    int b[3] = { M(4,9), M(4,4), M(14,4) };
+    for (int i = 0; i < 3; i++) p2[i] = b[i]; n2 = 3;
+    C = M(9,9);
+}
+
+// A third intersection triple (T5): completing cell (9,9) is the 5th stone of a
+// vertical four and both diagonals (col + 2 diagonals).
+static void intersectTriple3(int *p1, int &n1, int *p2, int &n2, int &C) {
+    int a[12] = { M(9,5),M(9,6),M(9,7),M(9,8),        // col-9 four,   block (9,4),  completion (9,10)
+                  M(5,5),M(6,6),M(7,7),M(8,8),        // main-diag four, block (4,4), completion (10,10)
+                  M(13,5),M(12,6),M(11,7),M(10,8) };  // anti-diag four, block (14,4), completion (8,10)
+    for (int i = 0; i < 12; i++) p1[i] = a[i]; n1 = 12;
+    int b[3] = { M(9,4), M(4,4), M(14,4) };
+    for (int i = 0; i < 3; i++) p2[i] = b[i]; n2 = 3;
+    C = M(9,9);
+}
+
+// The three-half-open-four covering triple (kept for T4's race construction):
+// stone X=(8,9) promotes fours A(row9) and B(col8); stone Y=(15,2) promotes four
+// C(row2). Three distinct completions -> forced six next turn.
+static void tripleP1(int *p1, int &n1, int *p2, int &n2, int &X, int &Y) {
+    int a[12] = { M(4,9),M(5,9),M(6,9),M(7,9),   // four A (row 9), blocked left by (3,9)
+                  M(8,5),M(8,6),M(8,7),M(8,8),   // four B (col 8), blocked top  by (8,4)
+                  M(11,2),M(12,2),M(13,2),M(14,2) }; // four C (row 2), blocked left by (10,2)
+    for (int i = 0; i < 12; i++) p1[i] = a[i]; n1 = 12;
+    int b[3] = { M(3,9), M(8,4), M(10,2) };
+    for (int i = 0; i < 3; i++) p2[i] = b[i]; n2 = 3;
+    X = M(8,9); Y = M(15,2);
+}
+
+// --- T3: blockable look-alike (open five => exactly 2 distinct completions) ---
+// MUST NOT terminalize: 2 cells the opponent covers with its 2 stones. Highest
+// severity -- a false positive here is a hallucinated win.
+static void T3_blockable() {
+    printf("T3: blockable look-alike (open five, 2 distinct completions) must NOT terminalize\n");
+    CAi ai(13, 4, true);
+    int b[19][19]; for (int x = 0; x < 19; x++) for (int y = 0; y < 19; y++) b[x][y] = 0;
+    // open five P1 5..9 on row 9 (completions (4,9),(10,9)) + an unrelated open
+    // FOUR on row 5 (contributes 0 -- only 4 P in any window). nDistinct == 2.
+    int five[5] = { M(5,9),M(6,9),M(7,9),M(8,9),M(9,9) };
+    int four[4] = { M(5,5),M(6,5),M(7,5),M(8,5) };
+    for (int i = 0; i < 5; i++) b[five[i]%19][five[i]/19] = 1;
+    for (int i = 0; i < 4; i++) b[four[i]%19][four[i]/19] = 1;
+    bool det = detOn(ai, b, 1), ora = oracleForcedWin(b, 1);
+    printf("    det=%d ora=%d\n", (int)det, (int)ora);
+    CHECK(!det, "T3: c6UnstoppableThreat(1)==false on the 2-distinct-completion look-alike");
+    CHECK(!ora, "T3: oracle agrees it is NOT forced");
+}
+
+// --- T4: oppImm race negative -- real P1 triple, but opponent has a one-move six.
+static void T4_race() {
+    printf("T4: race (oppImm) -- P1 triple present but opponent has a one-move six -> refuse\n");
+    CAi ai(13, 4, true);
+    int p1[12], p2[3], n1, n2, X, Y; tripleP1(p1, n1, p2, n2, X, Y);
+    int b[19][19]; for (int x = 0; x < 19; x++) for (int y = 0; y < 19; y++) b[x][y] = 0;
+    for (int i = 0; i < n1; i++) b[p1[i]%19][p1[i]/19] = 1;
+    for (int i = 0; i < n2; i++) b[p2[i]%19][p2[i]/19] = 2;
+    b[X%19][X/19] = 1; b[Y%19][Y/19] = 1;                 // P1 plays its triple -> real 3-distinct
+    bool detNoRace = detOn(ai, b, 1);
+    // add a standing opponent one-move six far away: 5 P2 in a 6-window (row 15).
+    int o5[5] = { M(2,15),M(3,15),M(4,15),M(5,15),M(6,15) };
+    for (int i = 0; i < 5; i++) b[o5[i]%19][o5[i]/19] = 2; // 0 P1 + 5 O window -> oppImm
+    bool detRace = detOn(ai, b, 1), oraRace = oracleForcedWin(b, 1);
+    printf("    without race det=%d ; with race det=%d ora=%d\n", (int)detNoRace, (int)detRace, (int)oraRace);
+    CHECK(detNoRace, "T4: sanity -- same triple without the race IS a forced win");
+    CHECK(!detRace, "T4: c6UnstoppableThreat(1)==false once opponent has a one-move six (oppImm veto)");
+    CHECK(!oraRace, "T4: oracle agrees the race refuses the win");
+}
+
+// --- T6: quiet midgame -- detector false at root; getMove returns a legal,
+// non-winning, non-terminalized pair.
+static void T6_quiet() {
+    printf("T6: quiet midgame -- no spurious terminal\n");
+    int mv[7] = { M(9,9), M(8,10), M(10,8), M(9,11), M(7,9), M(11,9), M(9,7) };
+    CAi pre(13, 4, true); replayOnly(pre, mv, 7);
+    int b[19][19]; for (int x = 0; x < 19; x++) for (int y = 0; y < 19; y++) { int v = pre.brd[0][x][y]; b[x][y] = (v > 0) ? v : 0; }
+    bool det1 = detOn(pre, b, 1), det2 = detOn(pre, b, 2);
+    CHECK(!det1 && !det2, "T6: detector false for both players on a quiet position");
+    int m1, m2, bscr; runGM(4, mv, 7, true, m1, m2, bscr);
+    bool legal = m1 >= 0 && m1 <= 360 && m2 >= 0 && m2 <= 360 && m1 != m2;
+    CHECK(legal, "T6: getMove returns a legal distinct pair on a quiet position");
+    CHECK(!pairForcedThreat(pre, m1, m2, 1), "T6: returned pair is not a (fake) covering win");
+}
+
+// --- positive measurement + assertions (T1/T2/T5) -----------------------
+// Direct-detector truth is deterministic and load-bearing for correctness; the
+// getMove flag differential is measured (bscr / returned pair) so we can prove
+// the terminal is load-bearing in search. `tag` selects the construction.
+// Offense positive: one stone C completes an intersection triple (three fives).
+// In the mid-pair second-stone search (c6NextSame==0) Score6's win-in-pair is
+// inactive and the conversion is beyond the shallow horizon, so ONLY the covering
+// terminal can score this a win -- the load-bearing flag/injection mutation gate.
+static void offenseFlip(const char *tag, void (*build)(int*,int&,int*,int&,int&)) {
+    printf("%s\n", tag);
+    int p1[12], p2[3], n1, n2, C; build(p1, n1, p2, n2, C);
+    // (1) Direct detector + oracle on the turn-final board (structural + C).
+    CAi ai(13, 4, true);
+    int b[19][19]; for (int x = 0; x < 19; x++) for (int y = 0; y < 19; y++) b[x][y] = 0;
+    for (int i = 0; i < n1; i++) b[p1[i]%19][p1[i]/19] = 1;
+    for (int i = 0; i < n2; i++) b[p2[i]%19][p2[i]/19] = 2;
+    bool detBefore = detOn(ai, b, 1);
+    b[C%19][C/19] = 1;
+    bool det = detOn(ai, b, 1), ora = oracleForcedWin(b, 1);
+    CHECK(!detBefore, "positive: not yet a forced win before the completing stone C");
+    CHECK(det, "positive: c6UnstoppableThreat(1)==true once C completes the intersection triple");
+    CHECK(ora, "positive: oracle confirms the completed triple is a forced win");
+    // (2) getMove mid-pair (second-stone) search at shallow depth: terminal is
+    // the ONLY win signal. Flag ON must claim the win; flag OFF must not.
+    int mv[64]; CAi builder(13, 2, true);
+    int count = buildHistoryMidPair(builder, mv, p1, n1, p2, n2);
+    int m1on, m2on, bon, m1off, m2off, boff;
+    runGM(2, mv, count, true,  m1on,  m2on,  bon);
+    runGM(2, mv, count, false, m1off, m2off, boff);
+    printf("    midpair L2 count=%d  ON: m1=%d(%d,%d) bscr=%d | OFF: m1=%d bscr=%d\n",
+           count, m1on, m1on%19, m1on/19, bon, m1off, boff);
+    CHECK(bon >= 10000, "positive: flag ON -> engine claims the covering win (injection load-bearing)");
+    CHECK(boff < 10000, "positive: flag OFF -> win disappears (flag mutation gate flips)");
+    CHECK(m1on == C, "positive: flag ON -> engine plays the completing intersection cell C");
+}
+
+// T5: a third offense geometry (the flag+injection flip), plus a DEFENSE SANITY
+// block. NOTE (documented deviation): a defensive flag-FLIP is NOT achievable --
+// the opponent completes its intersection triple with its FIRST stone of the
+// turn (c6NextSame==1), where Score6's existing win-in-pair terminal already
+// scores it a win. So defense is handled with or without the covering terminal;
+// only OFFENSE (a mover's turn-final second stone, c6NextSame==0) is beyond
+// Score6's reach and thus load-bearing. We still assert the detector fires for
+// the opponent and the engine defends correctly.
+static void T5_case() {
+    offenseFlip("T5: intersection triple (col/2 diagonals) -> covering win (flag+injection gate)", intersectTriple3);
+    printf("T5b: defense sanity (opponent triple detected + neutralized; not a flag-flip)\n");
+    int q1[12], q2[3], n1, n2, D; intersectTriple(q1, n1, q2, n2, D);
+    int p1b[3], p2b[12];
+    for (int i = 0; i < 12; i++) p2b[i] = q1[i];   // opponent (P2) owns the three fours
+    for (int i = 0; i < 3; i++)  p1b[i] = q2[i];    // P1 owns the far-side blockers
+    CAi ai(13, 4, true);
+    int b[19][19]; for (int x = 0; x < 19; x++) for (int y = 0; y < 19; y++) b[x][y] = 0;
+    for (int i = 0; i < 12; i++) b[p2b[i]%19][p2b[i]/19] = 2;
+    for (int i = 0; i < 3; i++)  b[p1b[i]%19][p1b[i]/19] = 1;
+    b[D%19][D/19] = 2;
+    CHECK(detOn(ai, b, 2), "T5b: c6UnstoppableThreat(2)==true for the opponent's completed triple");
+    int mv[64]; CAi builder(13, 4, true);
+    int count = buildHistoryMidPair(builder, mv, p1b, 3, p2b, 12);
+    int m1, m2, bscr; runGM(4, mv, count, true, m1, m2, bscr);
+    printf("    P1 defensive move m1=%d(%d,%d) (D=%d) bscr=%d\n", m1, m1%19, m1/19, D, bscr);
+    CHECK(m1 == D, "T5b: engine defends by occupying the opponent's intersection cell D");
+}
+
+int main(int argc, char **argv) {
     if (chdir("MMAIWASM") != 0) { /* allow running inside MMAIWASM too */ }
+    int fuzzN = (argc > 1) ? atoi(argv[1]) : 50000;   // T0 board count (override via argv[1])
     case1_ownerOf();
     case2_packed_decode();
     case3_win_now();
@@ -478,6 +801,14 @@ int main() {
     case13_halfopen4_win();
     case14_priority_win();
     case15_defense_open4();
+    printf("\n--- Connect6 v2 covering-threat terminal ---\n");
+    T0_fuzz(fuzzN);
+    T3_blockable();
+    T4_race();
+    T6_quiet();
+    offenseFlip("T1: intersection triple (row/col/diag) -> covering win (flag+injection gate)", intersectTriple);
+    offenseFlip("T2: intersection triple (row/2 diagonals) -> covering win (flag+injection gate)", intersectTriple2);
+    T5_case();
     printf("\nFALLBACK HITS (defensive 2nd-stone guard): %d\n", g_fallback);
     printf("%s (%d failure%s)\n", failures ? "C6TEST FAIL" : "C6TEST PASS",
            failures, failures == 1 ? "" : "s");

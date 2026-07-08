@@ -1446,6 +1446,22 @@ int CAi::Tree() {
                     if (best>=5) { sc=12000; hfl=0; }
                 }
 
+#ifndef C6_NO_FORCE
+                // Connect6 v2: static covering-threat forced-win terminal. Fires
+                // only on a turn-final ply (c6NextSame==0), where BOTH of the
+                // mover's stones this turn are on bd, so the whole-board scan
+                // sees the full pair. Gated to the no-capture two-stone variant
+                // (game 13) so it is a strict no-op on every other path. Mirrors
+                // the boat block above: set the 12000 band and let the existing
+                // win path (below) do the rest. Never fires on a leaf ply
+                // (lvl==mxlv skips this make-move block) or on a TT hit (!hfl).
+                if (cfg.stonesPerTurn==2 && !cfg.capturePairs && c6ForceEnabled
+                    && !hfl && c6NextSame==0 && lvl<=4
+                    && c6UnstoppableThreat(fr)) {
+                    sc = 12000; hfl = 0;
+                }
+#endif
+
                 if (sc>=10000 && !hfl) { //check win
                     
                     scr[lvl][fr]=12000-lvl;
@@ -2223,6 +2239,65 @@ int CAi::Score6(CPoint pt) {
         else       sco[3-fr] = -mag;                         // opponent: negative
     }
     return sco[fr];
+}
+
+// Connect6 v2 (game 13 only): returns true iff mover P, having just placed BOTH
+// stones of its turn, has left on the board >= 3 length-6 "five" windows
+// (exactly 5 P + 1 empty + 0 enemy) whose >= 3 DISTINCT completion cells the
+// opponent's two blocking stones cannot all cover -- a proven forced six on P's
+// next turn. Pure function of (bd, P, dx[0..3], dy[0..3]); no side effects.
+//
+// Correctness (fives-only covering argument):
+//  (a) No captures in Connect6 (cfg.capturePairs==false), so P's 5 stones in a
+//      counted window are permanent; the ONLY cell the opponent can occupy to
+//      stop that window's six is its single empty cell. Each counted window's
+//      cover set is therefore the singleton {emptyIdx}.
+//  (b) The opponent places exactly 2 stones next turn -> it can occupy at most 2
+//      DISTINCT cells. seen[] dedups completion cells across overlapping/cross-
+//      axis windows, so nDistinct is exactly the number of independent single-
+//      cell obligations the opponent faces.
+//  (c) nDistinct>=3 => for ANY 2 cells the opponent takes, some counted window's
+//      completion cell stays empty; P drops one stone there next turn -> six.
+//  (d) oppImm veto: if the opponent can itself make six in one turn first
+//      (a window with 0 P and >=4 O, i.e. <=2 empties it fills with its 2
+//      stones), refuse -- the opponent wins the race on the intervening turn.
+// Only error mode is a mistaken REFUSAL (safe false negative, falls back to v1
+// search); no false positive can fire (see spec section 4). Fired only on
+// turn-final plies (c6NextSame==0) where the whole pair is on the board.
+bool CAi::c6UnstoppableThreat(int P) {
+    int O = 3 - P;
+    bool seen[361];
+    for (int i = 0; i < 361; i++) seen[i] = false;
+    int nDistinct = 0;
+    bool oppImm = false;
+    for (int a = 0; a < 4; a++) {
+        for (int sx = 0; sx < 19; sx++) {
+            for (int sy = 0; sy < 19; sy++) {
+                // window = 6 cells (sx+k*dx[a], sy+k*dy[a]), k=0..5.
+                // sx,sy in [0,18] and the k==5 endpoint checked below => every
+                // intermediate grid cell of a straight line is on-board too.
+                int ex5 = sx + 5*dx[a], ey5 = sy + 5*dy[a];
+                if (ex5 < 0 || ex5 >= 19 || ey5 < 0 || ey5 >= 19) continue; // off-board
+                int pc = 0, oc = 0, emptyIdx = -1;
+                for (int k = 0; k < 6; k++) {
+                    int cx = sx + k*dx[a], cy = sy + k*dy[a];
+                    int v = bd[cx][cy];
+                    if (v == P) pc++;
+                    else if (v == O) oc++;
+                    else emptyIdx = cy*19 + cx; // v<=0 : empty (0 or -1)
+                }
+                // mover "five": 5 P + 1 empty + 0 enemy -> completion cell = emptyIdx
+                if (oc == 0 && pc == 5) { // ec==1 implied (6 cells)
+                    if (!seen[emptyIdx]) { seen[emptyIdx] = true; nDistinct++; }
+                }
+                // opponent makes six THIS window on its intervening turn:
+                // 0 P + >=4 O => <=2 empties, fillable by O's two stones.
+                if (pc == 0 && oc >= 4) oppImm = true;
+            }
+        }
+    }
+    if (oppImm) return false; // opponent wins first -> refuse
+    return nDistinct >= 3;
 }
 
 // ---- Boat-Pente provisional-five helpers --------------------------------
