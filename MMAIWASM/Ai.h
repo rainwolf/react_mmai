@@ -125,6 +125,13 @@ protected:
 	// Connect6 (cfg.stonesPerTurn==2): tn at Move() entry, used by Tree() to
 	// rotate the player from the global 0-based stone index via ownerOf().
 	int tnRoot;
+	// Connect6 win-in-pair gate: true when the stone being placed at the current
+	// ply (global index g = tnRoot-2+lvl, owner == fr) is the FIRST of a turn's
+	// two stones, i.e. ownerOf(g+1)==ownerOf(g)==fr, so a same-turn second stone
+	// is still to come. Set beside every fr assignment in Tree() (push + backtrack)
+	// so it always matches the current mover; read by Score6() to decide whether a
+	// length-6 window with 5 mover stones + 1 empty is an immediate (this-turn) win.
+	int c6NextSame = 0;
 	int c6FallbackHits = 0;               // Connect6: times the defensive 2nd-stone fallback fired
 
 

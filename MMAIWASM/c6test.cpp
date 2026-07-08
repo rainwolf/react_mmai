@@ -75,6 +75,49 @@ static bool oppThreatRow9(CAi &ai, int engO, int oppO, int m2cell) {
     return false;
 }
 
+// After a Connect6 getMove, brd[0] holds every input stone plus the engine's m1
+// (m2 is decoded but not yet applied). Return true iff placing BOTH returned
+// stones yields a run of >=6 `player` on any axis -- the real "win taken"
+// invariant, independent of which stone of the pair happens to complete the run
+// or in what order they were emitted.
+static bool pairMakesSix(CAi &ai, int m1, int m2, int player) {
+    static const int dxx[4] = {1,0,1,1}, dyy[4] = {0,1,1,-1};
+    int b[19][19];
+    for (int x = 0; x < 19; x++) for (int y = 0; y < 19; y++) b[x][y] = ai.brd[0][x][y];
+    if (m1 >= 0 && m1 <= 360) b[m1%19][m1/19] = player;
+    if (m2 >= 0 && m2 <= 360) b[m2%19][m2/19] = player;
+    for (int y = 0; y < 19; y++) for (int x = 0; x < 19; x++) {
+        if (b[x][y] != player) continue;
+        for (int a = 0; a < 4; a++) {
+            int n = 1, cx = x + dxx[a], cy = y + dyy[a];
+            while (cx>=0 && cx<19 && cy>=0 && cy<19 && b[cx][cy]==player) { n++; cx+=dxx[a]; cy+=dyy[a]; }
+            if (n >= 6) return true;
+        }
+    }
+    return false;
+}
+
+// Drive a real packed getMove() at each listed level and assert the engine's two
+// stones make a six. Used by the win-in-pair cases (open/half-open 4). Levels
+// include L1 on purpose: at depth 1 the search never expands the same-player
+// second stone, so ONLY Score6's win-in-pair terminal can find the win -- this is
+// the assertion the mutation gate (disable that terminal) is designed to break.
+static void assertWinAtLevels(const char *label, int *mv, int n, int mover,
+                              const int *levels, int nl) {
+    for (int li = 0; li < nl; li++) {
+        int L = levels[li];
+        CAi ai(13, L, true);
+        int packed = ai.getMove(mv, n);
+        g_fallback += ai.c6FallbackHits;
+        int m1 = DM1(packed), m2 = DM2(packed);
+        char buf[160];
+        snprintf(buf, sizeof buf,
+                 "%s L%d: pair completes six (m1=%d(%d,%d) m2=%d(%d,%d))",
+                 label, L, m1, m1%19, m1/19, m2, m2%19, m2/19);
+        CHECK(pairMakesSix(ai, m1, m2, mover), buf);
+    }
+}
+
 // --- case 1: ownerOf owner sequence --------------------------------------
 // idx : 0 1 2 3 4 5 6 7 8 9 10 11
 // own : 1 2 2 1 1 2 2 1 1 2 2  1   (P1 opens with a lone stone at idx 0)
@@ -153,7 +196,13 @@ static void case3_win_now() {
         int m1 = DM1(packed), m2 = DM2(packed);
         printf("    (getMove packed=%d -> m1=%d(%d,%d) m2=%d(%d,%d))\n",
                packed, m1, m1%19, m1/19, m2, m2%19, m2/19);
-        CHECK(m1 == M(3,9) || m1 == M(9,9), "decoded m1 completes the six (3,9)/(9,9)");
+        // The win is "taken" iff BOTH stones together make a six -- which stone of
+        // the pair completes the run (and in what order) is an engine detail. With
+        // five already down, the pair may complete the six (e.g. (9,9)+(?)) or push
+        // it to a seven ((9,9)+(10,9)); both are wins. (Old check pinned m1 to the
+        // single completing cell and broke when Score6's win-in-pair terminal let
+        // the engine pick an equally-winning pair ordering.)
+        CHECK(pairMakesSix(ai, m1, m2, 1), "engine's pair completes a six (win taken)");
         CHECK(ai.brd[0][m1%19][m1/19] == 1, "m1 was applied as engine (P1) stone");
     }
 }
@@ -335,6 +384,83 @@ static void case11_pinned_regression() {
     }
 }
 
+// --- case 12: win-in-pair, own OPEN FOUR while opponent has a live threat ---
+// The engine (P1) already has an open four (5,9)-(8,9). The opponent (P2) has
+// its OWN open four (5,5)-(8,5) elsewhere. P1 moves first this turn and can
+// complete six THIS turn -- taking its own win strictly dominates blocking.
+// Without Score6's win-in-pair terminal the extension scores only ~w6[5]=1600
+// (nonterminal), while blocking the opponent four bids up to the *4 defense
+// clamp, so a depth-1 (level 1) search blocks and MISSES the win. Levels 1/2/4.
+static void case12_open4_win() {
+    printf("case 12: open four win taken (opponent has own open four)\n");
+    // owners: P1 = idx 0,3,4,7,8 ; P2 = idx 1,2,5,6,9,10 ; P1 plays idx 11,12.
+    int mv[11] = { M(5,9), M(5,5), M(6,5), M(6,9), M(7,9),
+                   M(7,5), M(8,5), M(8,9), M(2,2), M(0,18), M(18,18) };
+    int levels[3] = { 1, 2, 4 };
+    assertWinAtLevels("open4", mv, 11, 1, levels, 3);
+}
+
+// --- case 13: win-in-pair, own HALF-OPEN FOUR (one end enemy-blocked) --------
+// P1 four (5,9)-(8,9) with the left end blocked by a P2 stone at (4,9); the only
+// winning line is rightward, (9,9)+(10,9). The opponent also has an open four on
+// row 5, so (as in case 12) a search too shallow to expand the second stone will
+// block instead of win unless Score6 terminalizes the win-in-pair. Levels 1/2/4.
+static void case13_halfopen4_win() {
+    printf("case 13: half-open four win taken (blocked one end)\n");
+    int mv[11] = { M(5,9), M(4,9), M(5,5), M(6,9), M(7,9),
+                   M(6,5), M(7,5), M(8,9), M(2,2), M(8,5), M(18,18) };
+    int levels[3] = { 1, 2, 4 };
+    assertWinAtLevels("half-open4", mv, 11, 1, levels, 3);
+}
+
+// --- case 14: priority -- own open four vs TWO opponent open fours -----------
+// A denser competing-threat board (opponent open fours on rows 5 and 13). The
+// engine must still take its own row-9 win rather than start blocking. This is
+// the "engine open 4 AND opponent scary threat elsewhere" priority test with a
+// threat strong enough to actually contest the score (an open three does not
+// out-bid the extension even in the unfixed engine, so it would not exercise the
+// fix). count=15 so P1 has a genuine two-stone turn (idx 15,16). Levels 1/2/4.
+static void case14_priority_win() {
+    printf("case 14: priority -- own open four beats two opponent open fours\n");
+    // owners: P1 = idx 0,3,4,7,8,11,12 ; P2 = idx 1,2,5,6,9,10,13,14 ; P1 plays 15,16.
+    int mv[15] = { M(5,9), M(5,5), M(6,5), M(6,9), M(7,9),   // own r9 + opp r5
+                   M(7,5), M(8,5), M(8,9), M(1,1), M(5,13),  // filler + opp r13
+                   M(6,13), M(1,17), M(17,1), M(7,13), M(8,13) };
+    int levels[3] = { 1, 2, 4 };
+    assertWinAtLevels("priority", mv, 15, 1, levels, 3);
+}
+
+// --- case 15: defense -- neutralize an opponent open four (engine cannot win) -
+// The opponent (P2) has an open four on row 9; the engine (P1) has only scattered
+// corner stones and cannot make its own six, so its pair must kill the threat:
+// no live 6-window with 5 opponent stones + an empty may remain. Complements
+// case 5 by exercising the same requirement at both a shallow and a deep level.
+// Note: this defense already held before the win-in-pair terminal (via the *4
+// blocking weight), so this case does not regression-cover this diff -- it guards
+// against future eval changes weakening open-four defense. Levels 2 and 4.
+static void case15_defense_open4() {
+    printf("case 15: defense -- opponent open four neutralized\n");
+    // owners: P1 = idx 0,3,4,7,8 (corners) ; P2 = idx 1,2,5,6 (open4) + 9,10 filler.
+    int mv[11] = { M(0,0), M(5,9), M(6,9), M(18,0), M(0,18),
+                   M(7,9), M(8,9), M(18,18), M(1,1), M(0,5), M(18,5) };
+    CAi pre(13, 4, true);
+    replayOnly(pre, mv, 11);
+    bool before = oppThreatRow9(pre, /*eng*/1, /*opp*/2, /*m2*/-1);
+    CHECK(before, "sanity: opponent open four is a live 6-threat pre-move");
+    int levels[2] = { 2, 4 };
+    for (int li = 0; li < 2; li++) {
+        int L = levels[li];
+        CAi ai(13, L, true);
+        int packed = ai.getMove(mv, 11);
+        g_fallback += ai.c6FallbackHits;
+        int m2 = DM2(packed);
+        bool after = oppThreatRow9(ai, /*eng*/1, /*opp*/2, /*m2*/m2);
+        char buf[128];
+        snprintf(buf, sizeof buf, "L%d: opponent open four neutralized (after=%d)", L, after);
+        CHECK(!after, buf);
+    }
+}
+
 int main() {
     if (chdir("MMAIWASM") != 0) { /* allow running inside MMAIWASM too */ }
     case1_ownerOf();
@@ -348,6 +474,10 @@ int main() {
     case9_determinism();
     case10_single_search_integrity();
     case11_pinned_regression();
+    case12_open4_win();
+    case13_halfopen4_win();
+    case14_priority_win();
+    case15_defense_open4();
     printf("\nFALLBACK HITS (defensive 2nd-stone guard): %d\n", g_fallback);
     printf("%s (%d failure%s)\n", failures ? "C6TEST FAIL" : "C6TEST PASS",
            failures, failures == 1 ? "" : "s");

@@ -631,6 +631,7 @@ int CAi::Move() { // AI MAIN routine
         for (i=0; i<1444; i++)    //clear fukumi/legal table
             *(pFk+i)=0;
         fr=cp;
+        c6NextSame=0;   // single-point score has no same-turn follower: never a win-in-pair
         fhn=0;
         bscr= Score(pxy[0]);
 //        pDoc->cap1=cap1;           //return vals
@@ -1095,6 +1096,11 @@ int CAi::Tree() {
                 // exactly what the minimax needs. fr(lvl==1)==cp (==ownerOf of
                 // the mover), keeping cp-indexed ciel/scr consistent.
                 fr = ownerOf(tnRoot-2+lvl);
+                // Win-in-pair gate for Score6: the stone placed here has global
+                // index g = tnRoot-2+lvl; a same-turn second stone still follows
+                // iff ownerOf(g+1)==fr. (Set right beside fr so every Eval/Score6
+                // in this level's candidate scan sees the mover-consistent value.)
+                c6NextSame = (ownerOf(tnRoot-1+lvl)==fr);
             } else {
                 fr=cp-1+lvl;
                 while (fr>np) fr-=np;
@@ -1465,7 +1471,7 @@ int CAi::Tree() {
             // stone of a turn must NOT flip the player -- only recomputing
             // fr from tnRoot/lvl (exactly as the push path does) gets this
             // right for every rotation position.
-            if (cfg.stonesPerTurn==2) fr=ownerOf(tnRoot-2+lvl);
+            if (cfg.stonesPerTurn==2) { fr=ownerOf(tnRoot-2+lvl); c6NextSame=(ownerOf(tnRoot-1+lvl)==fr); }
             else { fr--; if (!fr) fr=np; }
         }
         else if (lvl==mxlv) {
@@ -2172,6 +2178,25 @@ int CAi::Score6(CPoint pt) {
     for (int sd=0; sd<2; sd++) {
         int P = (sd==0) ? fr : 3-fr;
         int acc = 0, terminal = 0;
+        // Win-in-pair (Connect6, two stones per turn): a length-6 window holding
+        // 5 mover stones (incl. the hypothetical stone at pt) + 1 on-board empty
+        // is ALREADY a made win when the mover still has this turn's second stone
+        // to play (c6NextSame): the opponent never moves between the pair, so the
+        // mover just drops the last stone in that empty cell -> six in a row. So
+        // for the MOVER perspective (sd==0) with a second stone coming, n==5 is
+        // terminal, not the w6[5]=1600 nonterminal "extend a four" score.
+        //
+        // Only the mover gets this. For the OPPONENT perspective (sd==1) an n==5
+        // window is the opponent's OWN win-in-pair -- but it is not our stone to
+        // complete and it is not their move yet. Their win-in-pair is evaluated as
+        // a real terminal when the search reaches THEIR ply (they become fr with
+        // their own c6NextSame). Within our ply we must score it as the top
+        // nonterminal threat (w6[5], flowing through the existing negative-mag
+        // convention into Eval's sco[fr]-sco[3-fr]*4 defense line) so blocking it
+        // stays urgent -- terminalizing it here would fake a loss that isn't forced.
+        // c6NextSame==0 for the pair's SECOND stone (no third stone this turn), so
+        // n==5 is correctly non-terminal there too.
+        int winN = (sd==0 && c6NextSame) ? 5 : 6;
         for (int a=0; a<4 && !terminal; a++) {
             int line[11];                          // offsets -5..+5 along axis a
             for (int k=0; k<11; k++) {
@@ -2189,7 +2214,7 @@ int CAi::Score6(CPoint pt) {
                     if (v==P) n++;                          // center + any P stones
                 }
                 if (off || blk) continue;
-                if (n>=6) { terminal=1; break; }
+                if (n>=winN) { terminal=1; break; }   // n>=6 always; n==5 too when win-in-pair
                 acc += w6[n];
             }
         }
