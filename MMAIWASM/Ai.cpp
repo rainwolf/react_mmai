@@ -1447,17 +1447,24 @@ int CAi::Tree() {
                 }
 
 #ifndef C6_NO_FORCE
-                // Connect6 v2: static covering-threat forced-win terminal. Fires
-                // only on a turn-final ply (c6NextSame==0), where BOTH of the
-                // mover's stones this turn are on bd, so the whole-board scan
-                // sees the full pair. Gated to the no-capture two-stone variant
-                // (game 13) so it is a strict no-op on every other path. Mirrors
-                // the boat block above: set the 12000 band and let the existing
-                // win path (below) do the rest. Never fires on a leaf ply
-                // (lvl==mxlv skips this make-move block) or on a TT hit (!hfl).
-                if (cfg.stonesPerTurn==2 && !cfg.capturePairs && c6ForceEnabled
-                    && !hfl && c6NextSame==0 && lvl<=4
-                    && c6UnstoppableThreat(fr)) {
+                // Connect6 v3: bounded forcing-search win terminal (VCDF prover,
+                // docs/connect6-v3-vcf-spec.md). Fires only on a turn-final ply
+                // (c6NextSame==0), where BOTH of the mover's stones this turn are
+                // on bd, so the prover models whole 2-stone turns from a settled
+                // position. Gated to the no-capture two-stone variant (game 13) so
+                // it is a strict no-op on every other path. tnRoot>=6 skips the
+                // opening single-stone anomaly (refusal-only; v2's W1 base needs
+                // >=15 mover stones so this changes no v2 verdict). Mirrors the
+                // boat block above: set the 12000 band and let the existing win
+                // path (below) do the rest. Never fires on a leaf ply (lvl==mxlv
+                // skips this make-move block) or on a TT hit (!hfl). c6ForcedWin's
+                // root base cases reproduce v2 c6UnstoppableThreat, so it stays a
+                // strict superset of v2; c6ForceEnabled=false disables it. The
+                // winRowLength==6 clause pins the prover's hardcoded six-in-a-row
+                // geometry to the only variant that uses it (review F5).
+                if (cfg.stonesPerTurn==2 && !cfg.capturePairs && cfg.winRowLength==6
+                    && c6ForceEnabled && !hfl && c6NextSame==0 && tnRoot>=6 && lvl<=4
+                    && c6ForcedWin(fr, lvl)) {
                     sc = 12000; hfl = 0;
                 }
 #endif
@@ -2264,40 +2271,142 @@ int CAi::Score6(CPoint pt) {
 // Only error mode is a mistaken REFUSAL (safe false negative, falls back to v1
 // search); no false positive can fire (see spec section 4). Fired only on
 // turn-final plies (c6NextSame==0) where the whole pair is on the board.
-bool CAi::c6UnstoppableThreat(int P) {
+// (v2 body relocated: c6UnstoppableThreat is now a c6ScanFives wrapper, defined
+// just below so v2 and v3 share the one scan. The covering argument above is
+// unchanged and is the W1 base case of the v3 prover.)
+
+// ===== Connect6 v3 forcing-search prover (docs/connect6-v3-vcf-spec.md) ===
+// One whole-board pass (same window geometry/counting as v2's audited loop),
+// classifying every on-board 6-window through the hypothetical bd:
+//   pSix  = a 6-window is all P (a made six; overlines contain one).
+//   pFour = a 0-enemy window holds >=4 P => P can six THIS turn (canSixNow(P)).
+//   oppImm= a 0-P window holds >=4 O => O can six in one 2-stone turn (v2 veto).
+//   nDistinct/c1/c2 = count + first two of P's DISTINCT five(pc==5,oc==0)
+//                     completion cells (the singleton cover cells; seen[] dedup).
+C6Scan CAi::c6ScanFives(int P) {
     int O = 3 - P;
-    bool seen[361];
-    for (int i = 0; i < 361; i++) seen[i] = false;
-    int nDistinct = 0;
-    bool oppImm = false;
-    for (int a = 0; a < 4; a++) {
-        for (int sx = 0; sx < 19; sx++) {
+    C6Scan r; r.nDistinct = 0; r.pSix = r.pFour = r.oppImm = false;
+    r.c1.x = r.c1.y = r.c2.x = r.c2.y = -1;
+    bool seen[361]; for (int i = 0; i < 361; i++) seen[i] = false;
+    for (int a = 0; a < 4; a++)
+        for (int sx = 0; sx < 19; sx++)
             for (int sy = 0; sy < 19; sy++) {
-                // window = 6 cells (sx+k*dx[a], sy+k*dy[a]), k=0..5.
-                // sx,sy in [0,18] and the k==5 endpoint checked below => every
-                // intermediate grid cell of a straight line is on-board too.
                 int ex5 = sx + 5*dx[a], ey5 = sy + 5*dy[a];
-                if (ex5 < 0 || ex5 >= 19 || ey5 < 0 || ey5 >= 19) continue; // off-board
-                int pc = 0, oc = 0, emptyIdx = -1;
+                if (ex5 < 0 || ex5 >= 19 || ey5 < 0 || ey5 >= 19) continue;
+                int pc = 0, oc = 0, ex = -1, ey = -1;
                 for (int k = 0; k < 6; k++) {
-                    int cx = sx + k*dx[a], cy = sy + k*dy[a];
-                    int v = bd[cx][cy];
+                    int cx = sx + k*dx[a], cy = sy + k*dy[a], v = bd[cx][cy];
                     if (v == P) pc++;
                     else if (v == O) oc++;
-                    else emptyIdx = cy*19 + cx; // v<=0 : empty (0 or -1)
+                    else { ex = cx; ey = cy; }        // last empty; for pc==5 (oc==0) it is the unique one
                 }
-                // mover "five": 5 P + 1 empty + 0 enemy -> completion cell = emptyIdx
-                if (oc == 0 && pc == 5) { // ec==1 implied (6 cells)
-                    if (!seen[emptyIdx]) { seen[emptyIdx] = true; nDistinct++; }
+                if (pc == 6) r.pSix = true;
+                if (oc == 0 && pc >= 4) r.pFour = true;
+                if (pc == 0 && oc >= 4) r.oppImm = true;
+                if (oc == 0 && pc == 5) {             // a five: single completion at (ex,ey)
+                    int idx = ey*19 + ex;
+                    if (!seen[idx]) { seen[idx] = true;
+                        if (r.nDistinct == 0) { r.c1.x = ex; r.c1.y = ey; }
+                        else if (r.nDistinct == 1) { r.c2.x = ex; r.c2.y = ey; }
+                        r.nDistinct++;
+                    }
                 }
-                // opponent makes six THIS window on its intervening turn:
-                // 0 P + >=4 O => <=2 empties, fillable by O's two stones.
-                if (pc == 0 && oc >= 4) oppImm = true;
             }
-        }
+    return r;
+}
+
+// v2 covering terminal, now a thin wrapper over the shared scan. Behavior is
+// byte-identical to the original loop (T0_fuzz gates this): !veto && |C|>=3.
+bool CAi::c6UnstoppableThreat(int P) {
+    C6Scan r = c6ScanFives(P);
+    return !r.oppImm && r.nDistinct >= 3;
+}
+
+// OR-node candidate generator (structure theorem, spec 4.1-4.2). When the
+// caller reaches generation, canSixNow(P) is false => no 0-enemy window holds
+// >=4 P => a NEW five can only be made by placing BOTH of this turn's stones
+// into a window currently holding exactly 3 P + 0 O (3 empties); filling any 2
+// of its 3 empties makes that window a five. Emits those pairs (packed a*361+b,
+// a<b), deduplicated, capped at max. Generation is refusal-only for soundness:
+// the child c6And re-derives fives/|C|/veto from a fresh scan, so a missed or
+// useless pair only costs a (safe) false negative -- never a false positive.
+int CAi::c6GenOpenFivePairs(int P, int *out, int max) {
+    int O = 3 - P, n = 0;
+    for (int a = 0; a < 4 && n < max; a++)
+        for (int sx = 0; sx < 19 && n < max; sx++)
+            for (int sy = 0; sy < 19 && n < max; sy++) {
+                int ex5 = sx + 5*dx[a], ey5 = sy + 5*dy[a];
+                if (ex5 < 0 || ex5 >= 19 || ey5 < 0 || ey5 >= 19) continue;
+                int pc = 0, oc = 0, ec[6], ne = 0;
+                for (int k = 0; k < 6; k++) {
+                    int cx = sx + k*dx[a], cy = sy + k*dy[a], v = bd[cx][cy];
+                    if (v == P) pc++; else if (v == O) oc++; else ec[ne++] = cy*19 + cx;
+                }
+                if (oc != 0 || pc != 3) continue;    // need 3 P + 0 O + exactly 3 empties
+                for (int i = 0; i < ne && n < max; i++)
+                    for (int j = i+1; j < ne && n < max; j++) {
+                        int lo = ec[i] < ec[j] ? ec[i] : ec[j];
+                        int hi = ec[i] < ec[j] ? ec[j] : ec[i];
+                        int packed = lo * 361 + hi;
+                        bool dup = false; for (int q = 0; q < n; q++) if (out[q] == packed) { dup = true; break; }
+                        if (!dup) out[n++] = packed;
+                    }
+            }
+    return n;
+}
+
+// AND node: P just completed a turn (both stones on bd); O to move. Returns
+// true only if P's win is PROVEN (else refuse -> safe). Recurses solely on the
+// |C|==2 unique-forced-reply shape (Lemma L2): O's whole 2-stone turn is forced
+// onto {c1,c2} or O loses to one P stone next turn.
+bool CAi::c6And(int P, int d) {
+    if (--c6Budget < 0) return false;                // budget exhausted: REFUSE
+    C6Scan R = c6ScanFives(P);
+    if (R.pSix)           return true;               // W0: P six already on board
+    if (R.oppImm)         return false;              // O sixes on its intervening turn: REFUSE
+    if (R.nDistinct >= 3) return true;               // W1: v2 covering base
+    if (R.nDistinct != 2 || d == 0) return false;    // |C|<=1 => O has a free stone: REFUSE
+    int s1 = bd[R.c1.x][R.c1.y], s2 = bd[R.c2.x][R.c2.y];   // save EXACT values (0 vs -1)
+    bd[R.c1.x][R.c1.y] = 3-P;  bd[R.c2.x][R.c2.y] = 3-P;
+    bool w = c6Or(P, d - 1);
+    bd[R.c1.x][R.c1.y] = s1;   bd[R.c2.x][R.c2.y] = s2;     // exact restore
+    return w;
+}
+
+// OR node: P to place 2 stones. Wins via canSixNow (B1) or any generated
+// forcing pair that makes the child AND provable.
+bool CAi::c6Or(int P, int d) {
+    if (--c6Budget < 0) return false;
+    C6Scan R = c6ScanFives(P);
+    if (R.pSix)  return true;                        // defensive (six already present)
+    if (R.pFour) return true;                        // B1: canSixNow(P) -> six this turn
+    int pairs[C6_PAIR_MAX];
+    int np = c6GenOpenFivePairs(P, pairs, C6_PAIR_MAX);
+    for (int i = 0; i < np; i++) {
+        int ca = pairs[i] / 361, cb = pairs[i] % 361;
+        int ax = ca%19, ay = ca/19, bx = cb%19, by = cb/19;
+        int va = bd[ax][ay], vb = bd[bx][by];        // both empty by construction
+        bd[ax][ay] = P; bd[bx][by] = P;
+        bool w = c6And(P, d);
+        bd[ax][ay] = va; bd[bx][by] = vb;
+        if (w) return true;
     }
-    if (oppImm) return false; // opponent wins first -> refuse
-    return nDistinct >= 3;
+    return false;                                    // no proving pair found: REFUSE
+}
+
+// Top level: replaces the v2 call at the injection site. v2 fast path first
+// (a free W1@root), then the bounded AND-OR recursion under a fresh scan budget
+// and a depth ladder (K attacking turns) chosen by injection ply.
+bool CAi::c6ForcedWin(int P, int lvl) {
+    // No separate v2 fast path: c6And's OWN root base cases (pSix / oppImm veto /
+    // nDistinct>=3) reproduce c6UnstoppableThreat exactly before any recursion,
+    // so calling it first would only re-scan the root board (review F4). v3 is
+    // therefore still a strict superset of v2 (subsumption test gates this).
+    c6Budget = C6_SCAN_BUDGET;
+    int K = (lvl <= 2) ? 4 : 2;
+    bool w = c6And(P, K);
+    if (w) c6ForceHits++;                            // instrumentation: the terminal proved a win
+    return w;
 }
 
 // ---- Boat-Pente provisional-five helpers --------------------------------

@@ -38,6 +38,15 @@ struct CAiListener {
 	virtual ~CAiListener() {}
 };
 
+// Connect6 v3 forcing-search prover (docs/connect6-v3-vcf-spec.md). One
+// whole-board scan (c6ScanFives) fills this: pSix=a six(P) window exists;
+// oppImm=O can six in one 2-stone turn (window pc==0 && oc>=4); pFour=P can
+// six this turn (window oc==0 && pc>=4, "canSixNow(P)"); nDistinct=|C(P)|, the
+// count of DISTINCT five(P) completion cells, with the first two recorded in
+// c1,c2 (used only when nDistinct==2). Same geometry/counting as v2.
+struct C6Scan { int nDistinct; CPoint c1, c2; bool pSix, pFour, oppImm; };
+enum { C6_PAIR_MAX = 12, C6_SCAN_BUDGET = 3000 };
+
 class CAi {
 
 // Construction
@@ -133,11 +142,20 @@ protected:
 	// length-6 window with 5 mover stones + 1 empty is an immediate (this-turn) win.
 	int c6NextSame = 0;
 	int c6FallbackHits = 0;               // Connect6: times the defensive 2nd-stone fallback fired
+	// Connect6 v3 instrumentation: number of times the c6ForcedWin terminal
+	// proved a win (covering base OR deeper forcing recursion). Not reset per
+	// getMove (unlike c6FallbackHits) so a harness can sum it across a whole game
+	// to gauge how often the forcing terminal is load-bearing in real play.
+	long c6ForceHits = 0;
 	// Connect6 v2: master switch for the static covering-threat terminal
 	// (c6UnstoppableThreat). Default true (enabled). Tests build a second engine
 	// with this false to prove every new win/defense is load-bearing on the
 	// terminal (the flag mutation gate); also a one-switch production kill.
 	bool c6ForceEnabled = true;
+	// Connect6 v3: whole-board scan budget for one c6ForcedWin call (reset at
+	// entry). Decrement-before-work in c6And/c6Or; exhaustion => REFUSE. Valid
+	// only within a single top-level call (Tree is single-threaded per CAi).
+	int c6Budget = 0;
 
 
 	int ciel[20][7], mxnd[20], sec[3];
@@ -198,7 +216,15 @@ protected:
 	int Eval(int x, int y);
 	int Score(CPoint pt);
 	int Score6(CPoint pt);   // Connect6: direct 6-window eval, bypasses 5-based tables
-	bool c6UnstoppableThreat(int P); // Connect6 v2: static covering-threat forced-win terminal
+	bool c6UnstoppableThreat(int P); // Connect6 v2: static covering-threat forced-win terminal (now a c6ScanFives wrapper)
+	// Connect6 v3 forcing-search prover (docs/connect6-v3-vcf-spec.md). Pure
+	// w.r.t. engine state: c6And/c6Or place/undo scratch stones on bd (exact
+	// 0-vs-(-1) save/restore) and touch no other engine field, the TT, or rand.
+	C6Scan c6ScanFives(int P);                                   // one-pass scan (shared with v2)
+	int    c6GenOpenFivePairs(int P, int *out, int max); // OR candidates, packed a*361+b (a<b); a*361+b needs int (>65535)
+	bool   c6And(int P, int d);                                 // AND node: bases + unique-reply recursion
+	bool   c6Or(int P, int d);                                  // OR node: canSixNow + open-five pair enumeration
+	bool   c6ForcedWin(int P, int lvl);                         // top level: v2 fast path + budget + K ladder
 	int boatRunAxis(int x, int y, int p, int a, CPoint *cells); // boat: maximal own run on one axis
 	int boatRun(int x, int y, int p, CPoint *cells);            // boat: first axis whose run is >=5
 	int boatRunProof(int x, int y, int p);                      // boat: five has no capturable stone?
